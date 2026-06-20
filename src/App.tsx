@@ -6,6 +6,8 @@ import Bills from '@/pages/Bills';
 import Batches from '@/pages/Batches';
 import StockOut from '@/pages/StockOut';
 import Maintenance from '@/pages/Maintenance';
+import MonthEnd from '@/pages/MonthEnd';
+import Alerts from '@/pages/Alerts';
 
 export default function App() {
   return (
@@ -18,6 +20,8 @@ export default function App() {
           <Route path="/batches" element={<Batches />} />
           <Route path="/stock-out" element={<StockOut />} />
           <Route path="/maintenance" element={<Maintenance />} />
+          <Route path="/month-end" element={<MonthEnd />} />
+          <Route path="/alerts" element={<Alerts />} />
         </Route>
       </Routes>
     </Router>

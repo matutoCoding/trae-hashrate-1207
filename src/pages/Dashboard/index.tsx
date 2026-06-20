@@ -17,6 +17,9 @@ import {
   Eye,
   BarChart3,
   ScrollText,
+  Info,
+  CalendarDays,
+  Bell,
 } from 'lucide-react';
 import { useBatchStore } from '@/store/useBatchStore';
 import { useBillStore } from '@/store/useBillStore';
@@ -86,6 +89,63 @@ export default function Dashboard() {
   const warningBatches = getWarningBatches();
   const expiredBatches = getExpiredBatches();
 
+  const { getStockOutsByBatch, getStockOutsByBill } = useStockOutStore();
+
+  const alertCounts = useMemo(() => {
+    let paidNotFull = 0;
+    let cancelledNotRestored = 0;
+    let batchMismatch = 0;
+    let unpaidOverdue = 0;
+    const today = new Date();
+
+    bills.forEach((bill) => {
+      if (bill.status === 'paid') {
+        const totalOut = getStockOutsByBill(bill.id).reduce((s, o) => s + o.quantity, 0);
+        if (totalOut < bill.quantity) paidNotFull++;
+      }
+      if (bill.status === 'cancelled') {
+        if (getStockOutsByBill(bill.id).length > 0) cancelledNotRestored++;
+      }
+      if (bill.status === 'unpaid') {
+        const days = Math.floor((today.getTime() - new Date(bill.createdAt).getTime()) / (1000 * 60 * 60 * 24));
+        if (days >= 15) unpaidOverdue++;
+      }
+    });
+
+    batches.forEach((batch) => {
+      const txs = allBatchTx.filter((t) => t.batchId === batch.id);
+      const editQty = txs.filter((t) => t.type === 'edit').reduce((s, t) => s + t.quantityChange, 0);
+      const txOutQty = txs.filter((t) => t.type === 'stock_out').reduce((s, t) => s + t.quantityChange, 0);
+      const txRevokeQty = txs.filter((t) => t.type === 'revoke_out').reduce((s, t) => s + t.quantityChange, 0);
+      const txCancelQty = txs.filter((t) => t.type === 'bill_cancel').reduce((s, t) => s + t.quantityChange, 0);
+      const actualOuts = getStockOutsByBatch(batch.id);
+      const totalOutFromRecords = actualOuts.reduce((s, o) => s + o.quantity, 0);
+      const outQty = -Math.max(totalOutFromRecords, Math.abs(txOutQty));
+      const revokeQty = txRevokeQty + txCancelQty;
+      const createTx = txs.find((t) => t.type === 'create');
+      const openingQty = createTx ? createTx.remainingAfter : batch.totalQuantity;
+      const expectedRemaining = openingQty + editQty + outQty + revokeQty;
+      if (expectedRemaining !== batch.remainingQuantity) batchMismatch++;
+    });
+
+    return {
+      total: paidNotFull + cancelledNotRestored + batchMismatch + unpaidOverdue,
+      paidNotFull,
+      cancelledNotRestored,
+      batchMismatch,
+      unpaidOverdue,
+    };
+  }, [bills, batches, allBatchTx, getStockOutsByBill, getStockOutsByBatch]);
+
+  const currentMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+  const monthEndStats = useMemo(() => {
+    const getMonthStr = (d: string) => d.slice(0, 7);
+    const monthBills = bills.filter((b) => getMonthStr(b.createdAt) === currentMonth);
+    const revenue = monthBills.filter((b) => b.status === 'paid').reduce((s, b) => s + b.finalAmount, 0);
+    const unpaid = monthBills.filter((b) => b.status === 'unpaid').reduce((s, b) => s + b.finalAmount, 0);
+    return { revenue, unpaid, billCount: monthBills.length };
+  }, [bills, currentMonth]);
+
   const stats = [
     {
       label: '乐器总数',
@@ -130,29 +190,51 @@ export default function Dashboard() {
       const editQty = txs
         .filter((t) => t.type === 'edit')
         .reduce((sum, t) => sum + t.quantityChange, 0);
-      const outQty = txs
+
+      const txOutQty = txs
         .filter((t) => t.type === 'stock_out')
         .reduce((sum, t) => sum + t.quantityChange, 0);
-      const revokeQty = txs
+      const txRevokeQty = txs
         .filter((t) => t.type === 'revoke_out')
         .reduce((sum, t) => sum + t.quantityChange, 0);
-      const cancelQty = txs
+      const txCancelQty = txs
         .filter((t) => t.type === 'bill_cancel')
         .reduce((sum, t) => sum + t.quantityChange, 0);
+
+      const actualStockOuts = useStockOutStore
+        .getState()
+        .getStockOutsByBatch(batch.id);
+      const totalOutFromRecords = actualStockOuts.reduce((s, o) => s + o.quantity, 0);
+      const outQty = -Math.max(totalOutFromRecords, Math.abs(txOutQty));
+      const revokeQty = txRevokeQty + txCancelQty;
+
       const createTx = txs.find((t) => t.type === 'create');
-      const openingQty = createTx ? createTx.remainingAfter : batch.totalQuantity;
-      const expectedRemaining = openingQty + editQty + outQty + revokeQty + cancelQty;
+      let openingQty: number;
+      let explanation: string;
+
+      if (createTx) {
+        openingQty = createTx.remainingAfter;
+        explanation = '系统内创建';
+      } else {
+        openingQty = batch.totalQuantity;
+        explanation = '历史批次（按总数反推）';
+      }
+
+      const expectedRemaining = openingQty + editQty + outQty + revokeQty;
       const diff = expectedRemaining - batch.remainingQuantity;
+
       return {
         batch,
         openingQty,
         editQty,
         outQty,
         revokeQty,
-        cancelQty,
+        cancelQty: txCancelQty,
         expectedRemaining,
         actualRemaining: batch.remainingQuantity,
         diff,
+        explanation,
+        hasHistoricalData: !createTx,
       };
     });
   }, [batches, allBatchTx]);
@@ -297,6 +379,108 @@ export default function Dashboard() {
                 </p>
               </div>
             ))}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+            <div
+              className="card p-5 bg-gradient-to-br from-sandalwood-50 to-gold-50 cursor-pointer hover:shadow-card-hover transition-all group"
+              onClick={() => navigate('/month-end')}
+            >
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-10 h-10 rounded-xl bg-gold-100 text-gold-700 flex items-center justify-center">
+                      <CalendarDays className="w-5 h-5" />
+                    </div>
+                    <h3 className="text-lg font-semibold text-sandalwood-900">月结对账</h3>
+                    {monthEndStats.billCount > 0 && (
+                      <span className="bg-gold-100 text-gold-700 text-xs px-2 py-0.5 rounded-full ml-auto">
+                        {currentMonth} · {monthEndStats.billCount} 笔
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-sandalwood-600 mb-3">
+                    按月份汇总租赁收入、未收款、出库恢复和库存差异
+                  </p>
+                  <div className="flex items-center gap-4 text-sm">
+                    <div>
+                      <span className="text-sandalwood-500 text-xs">本月收入</span>
+                      <p className="font-bold text-teal-700">¥{monthEndStats.revenue.toLocaleString()}</p>
+                    </div>
+                    <div>
+                      <span className="text-sandalwood-500 text-xs">未收款</span>
+                      <p className="font-bold text-gold-700">¥{monthEndStats.unpaid.toLocaleString()}</p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-gold-600 font-medium flex items-center gap-1 mt-3">
+                    进入月结对账
+                    <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-1" />
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div
+              className="card p-5 bg-gradient-to-br from-sandalwood-50 to-red-50 cursor-pointer hover:shadow-card-hover transition-all group"
+              onClick={() => navigate('/alerts')}
+            >
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                      alertCounts.total > 0 ? 'bg-red-100 text-red-700' : 'bg-teal-100 text-teal-700'
+                    }`}>
+                      <Bell className="w-5 h-5" />
+                    </div>
+                    <h3 className="text-lg font-semibold text-sandalwood-900">异常提醒</h3>
+                    {alertCounts.total > 0 && (
+                      <span className="bg-red-500 text-white text-xs px-2 py-0.5 rounded-full ml-auto">
+                        {alertCounts.total} 项异常
+                      </span>
+                    )}
+                    {alertCounts.total === 0 && (
+                      <span className="bg-teal-100 text-teal-700 text-xs px-2 py-0.5 rounded-full ml-auto">
+                        运行正常
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-sandalwood-600 mb-3">
+                    已收款未出库、已取消未恢复、批次数量不平集中处理
+                  </p>
+                  <div className="flex items-center gap-3 text-xs flex-wrap">
+                    {alertCounts.paidNotFull > 0 && (
+                      <span className="bg-gold-50 text-gold-700 px-2 py-0.5 rounded-full">
+                        已收款未出库 {alertCounts.paidNotFull}
+                      </span>
+                    )}
+                    {alertCounts.cancelledNotRestored > 0 && (
+                      <span className="bg-red-50 text-red-700 px-2 py-0.5 rounded-full">
+                        取消未恢复 {alertCounts.cancelledNotRestored}
+                      </span>
+                    )}
+                    {alertCounts.batchMismatch > 0 && (
+                      <span className="bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full">
+                        批次不平 {alertCounts.batchMismatch}
+                      </span>
+                    )}
+                    {alertCounts.unpaidOverdue > 0 && (
+                      <span className="bg-orange-50 text-orange-700 px-2 py-0.5 rounded-full">
+                        逾期未收 {alertCounts.unpaidOverdue}
+                      </span>
+                    )}
+                    {alertCounts.total === 0 && (
+                      <span className="text-teal-600">所有数据正常 ✓</span>
+                    )}
+                  </div>
+                  <p className={`text-xs font-medium flex items-center gap-1 mt-3 ${
+                    alertCounts.total > 0 ? 'text-red-600' : 'text-teal-600'
+                  }`}>
+                    {alertCounts.total > 0 ? '立即处理异常' : '查看异常体检'}
+                    <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-1" />
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
 
           {(warningBatches.length > 0 ||
@@ -500,6 +684,7 @@ export default function Dashboard() {
               <thead>
                 <tr className="bg-sandalwood-50 text-sandalwood-600 text-xs uppercase">
                   <th className="px-3 py-2.5 text-left">批次/乐器</th>
+                  <th className="px-3 py-2.5 text-right">来源</th>
                   <th className="px-3 py-2.5 text-right">期初数量</th>
                   <th className="px-3 py-2.5 text-right">编辑调整</th>
                   <th className="px-3 py-2.5 text-right">出库</th>
@@ -524,6 +709,15 @@ export default function Dashboard() {
                       <p className="text-xs text-sandalwood-500">
                         {row.batch.batchNo}
                       </p>
+                    </td>
+                    <td className="px-3 py-3 text-right">
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        row.hasHistoricalData
+                          ? 'bg-sandalwood-100 text-sandalwood-600'
+                          : 'bg-teal-50 text-teal-700'
+                      }`}>
+                        {row.explanation}
+                      </span>
                     </td>
                     <td className="px-3 py-3 text-right text-sandalwood-700">
                       {row.openingQty}
@@ -843,7 +1037,7 @@ export default function Dashboard() {
               </button>
             </div>
             <div className="p-5">
-              <BatchTransactionList batchId={selectedReconcileBatch.id} />
+              <BatchTransactionList batchId={selectedReconcileBatch.id} batch={selectedReconcileBatch} />
             </div>
           </div>
         </div>
@@ -852,12 +1046,36 @@ export default function Dashboard() {
   );
 }
 
-function BatchTransactionList({ batchId }: { batchId: string }) {
+function BatchTransactionList({ batchId, batch }: { batchId: string; batch: Batch }) {
   const { getTransactionsByBatch } = useBatchTransactionStore();
+  const { getStockOutsByBatch } = useStockOutStore();
   const txs = getTransactionsByBatch(batchId);
-  if (txs.length === 0) {
-    return <p className="text-sm text-sandalwood-400 text-center py-8">暂无流水记录</p>;
-  }
+  const stockOuts = getStockOutsByBatch(batchId);
+  const txOutIds = txs.filter((t) => t.type === 'stock_out').map((t) => t.referenceId);
+  const historicalOuts = stockOuts.filter((o) => o.id && !txOutIds.includes(o.id));
+  const hasHistoricalData = !txs.find((t) => t.type === 'create');
+
+  type MergedItem =
+    | ({ kind: 'tx' } & BatchTransaction)
+    | ({ kind: 'out'; id: string; date: string; quantity: number; destination: string; receiver: string; billId: string | null });
+
+  const merged: MergedItem[] = [
+    ...txs.map((t) => ({ ...t, kind: 'tx' as const })),
+    ...historicalOuts.map((o) => ({
+      kind: 'out' as const,
+      id: o.id || `hist-${Date.now()}`,
+      date: o.outDate,
+      quantity: o.quantity,
+      destination: o.destination,
+      receiver: o.receiver,
+      billId: o.billId,
+    })),
+  ].sort((a, b) => {
+    const dateA = a.kind === 'tx' ? a.createdAt : a.date;
+    const dateB = b.kind === 'tx' ? b.createdAt : b.date;
+    return new Date(dateB).getTime() - new Date(dateA).getTime();
+  });
+
   const colorMap: Record<BatchTransactionType, string> = {
     create: 'border-l-teal-500 bg-teal-50',
     edit: 'border-l-sandalwood-500 bg-sandalwood-50',
@@ -866,38 +1084,99 @@ function BatchTransactionList({ batchId }: { batchId: string }) {
     bill_cancel: 'border-l-red-500 bg-red-50',
     adjustment: 'border-l-purple-500 bg-purple-50',
   };
+
+  if (merged.length === 0) {
+    return <p className="text-sm text-sandalwood-400 text-center py-8">暂无流水记录</p>;
+  }
+
   return (
     <div className="space-y-2">
-      {txs.map((tx) => (
-        <div
-          key={tx.id}
-          className={`p-3 rounded-lg border-l-4 ${colorMap[tx.type]}`}
-        >
-          <div className="flex items-start justify-between mb-1 gap-2 flex-wrap">
-            <span className="text-xs font-semibold text-sandalwood-700 px-2 py-0.5 bg-white/70 rounded-full">
-              {getTransactionTypeLabel(tx.type)}
-            </span>
-            <span className="text-xs text-sandalwood-500">
-              {formatDateTimeForExport(tx.createdAt)}
-            </span>
-          </div>
-          <div className="flex items-center gap-4 text-xs text-sandalwood-600 flex-wrap">
+      {hasHistoricalData && (
+        <div className="p-3 rounded-lg bg-sandalwood-50 border border-sandalwood-200 mb-3">
+          <p className="text-xs text-sandalwood-600 flex items-start gap-2">
+            <Info className="w-4 h-4 mt-0.5 text-sandalwood-500 flex-shrink-0" />
             <span>
-              剩余: <b>{tx.remainingBefore}</b> → <b>{tx.remainingAfter}</b>
-              {tx.quantityChange !== 0 && (
-                <span className={tx.quantityChange > 0 ? 'text-teal-600 ml-1' : 'text-red-600 ml-1'}>
-                  ({tx.quantityChange > 0 ? '+' : ''}{tx.quantityChange})
-                </span>
-              )}
+              该批次为历史导入数据，期初按总量 {batch.totalQuantity} 反推。
+              {historicalOuts.length > 0 && ` 以下 ${historicalOuts.length} 条出库为系统内已有记录（无对应流水），已纳入对账口径。`}
             </span>
-            <span>
-              总量: {tx.totalBefore} → {tx.totalAfter}
-            </span>
-          </div>
-          {tx.remark && <p className="text-xs text-sandalwood-500 mt-1">{tx.remark}</p>}
-          <p className="text-xs text-sandalwood-400 mt-1">操作人: {tx.operator}</p>
+          </p>
         </div>
-      ))}
+      )}
+      {merged.map((item) => {
+        if (item.kind === 'tx') {
+          return (
+            <div
+              key={item.id}
+              className={`p-3 rounded-lg border-l-4 ${colorMap[item.type]}`}
+            >
+              <div className="flex items-start justify-between mb-1 gap-2 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-semibold text-sandalwood-700 px-2 py-0.5 bg-white/70 rounded-full">
+                    {getTransactionTypeLabel(item.type)}
+                  </span>
+                  {item.referenceId && (
+                    <span className="text-xs text-sandalwood-500">
+                      关联: {item.referenceId}
+                    </span>
+                  )}
+                </div>
+                <span className="text-xs text-sandalwood-500">
+                  {formatDateTimeForExport(item.createdAt)}
+                </span>
+              </div>
+              <div className="flex items-center gap-4 text-xs text-sandalwood-600 flex-wrap">
+                <span>
+                  剩余: <b>{item.remainingBefore}</b> → <b>{item.remainingAfter}</b>
+                  {item.quantityChange !== 0 && (
+                    <span className={item.quantityChange > 0 ? 'text-teal-600 ml-1' : 'text-red-600 ml-1'}>
+                      ({item.quantityChange > 0 ? '+' : ''}{item.quantityChange})
+                    </span>
+                  )}
+                </span>
+                <span>
+                  总量: {item.totalBefore} → {item.totalAfter}
+                </span>
+              </div>
+              {item.remark && <p className="text-xs text-sandalwood-500 mt-1">{item.remark}</p>}
+              <p className="text-xs text-sandalwood-400 mt-1">操作人: {item.operator}</p>
+            </div>
+          );
+        }
+        return (
+          <div
+            key={item.id}
+            className="p-3 rounded-lg border-l-4 border-l-gold-500 bg-gold-50"
+          >
+            <div className="flex items-start justify-between mb-1 gap-2 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-semibold text-gold-700 px-2 py-0.5 bg-white/70 rounded-full">
+                  出库（历史）
+                </span>
+                {item.billId && (
+                  <span className="text-xs text-sandalwood-500">
+                    关联账单: {item.billId}
+                  </span>
+                )}
+              </div>
+              <span className="text-xs text-sandalwood-500">
+                {formatDateTimeForExport(item.date)}
+              </span>
+            </div>
+            <div className="flex items-center gap-4 text-xs text-sandalwood-600 flex-wrap">
+              <span>
+                出库数量: <b className="text-red-600">-{item.quantity}</b>
+              </span>
+              <span>
+                目的地: {item.destination}
+              </span>
+            </div>
+            <p className="text-xs text-sandalwood-500 mt-1">
+              接收人: {item.receiver}
+            </p>
+            <p className="text-xs text-sandalwood-400 mt-1">* 系统内记录，已纳入对账计算</p>
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -7,6 +7,8 @@ import {
   PackageOpen,
   Wrench,
   Music,
+  CalendarDays,
+  Bell,
 } from 'lucide-react';
 
 const navItems = [
@@ -16,6 +18,8 @@ const navItems = [
   { path: '/batches', label: '乐器批次', icon: Package },
   { path: '/stock-out', label: '拆分出库', icon: PackageOpen },
   { path: '/maintenance', label: '保养排期', icon: Wrench },
+  { path: '/month-end', label: '月结对账', icon: CalendarDays },
+  { path: '/alerts', label: '异常提醒', icon: Bell },
 ];
 
 export function Sidebar() {

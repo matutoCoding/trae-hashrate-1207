@@ -31,7 +31,7 @@ import {
   calculateRentalPrice,
 } from '@/utils/pricing';
 import { calculateDays, getTodayString } from '@/utils/date';
-import type { Bill } from '@/types';
+import type { Bill, StockOut } from '@/types';
 
 export default function Bills() {
   const { bills, addBill, updateBillStatus, getBillById, deleteBill, cancelBill } =
@@ -675,8 +675,8 @@ export default function Bills() {
                 {selectedBill && (
                   <FulfillmentSteps
                     bill={selectedBill}
-                    outQuantity={billOutQuantity}
-                    latestLog={fulfillmentLogs[0]}
+                    stockOuts={billStockOuts}
+                    logs={fulfillmentLogs}
                   />
                 )}
 
@@ -1154,128 +1154,319 @@ export default function Bills() {
 
 function FulfillmentSteps({
   bill,
-  outQuantity,
-  latestLog,
+  stockOuts,
+  logs,
 }: {
   bill: Bill;
-  outQuantity: number;
-  latestLog?: BillFulfillmentLog;
+  stockOuts: StockOut[];
+  logs: BillFulfillmentLog[];
 }) {
-  type StepKey = 'pending' | 'partial' | 'full' | 'revoked' | 'paid' | 'cancelled';
-  const steps: { key: StepKey; label: string; icon: typeof PackageOpen }[] = [
-    { key: 'pending', label: '待出库', icon: PackageOpen },
-    { key: 'partial', label: '部分出库', icon: ArrowRight },
-    { key: 'full', label: '全部出库', icon: CheckCircle },
-    { key: 'paid', label: '已收款', icon: DollarSign },
-    { key: 'revoked', label: '已撤回', icon: Undo2 },
-    { key: 'cancelled', label: '已取消', icon: X },
-  ];
+  const outQuantity = stockOuts.reduce((s, o) => s + o.quantity, 0);
+  const revokedLogs = logs.filter((l) => l.type === 'revoke_out');
+  const stockOutLogs = logs.filter((l) => l.type === 'stock_out');
 
-  let activeStep: StepKey = 'pending';
-  if (bill.status === 'cancelled') {
-    activeStep = 'cancelled';
-  } else if (latestLog?.type === 'revoke_out' && outQuantity === 0) {
-    activeStep = 'revoked';
-  } else if (bill.status === 'paid') {
-    activeStep = 'paid';
-  } else if (outQuantity >= bill.quantity && bill.quantity > 0) {
-    activeStep = 'full';
-  } else if (outQuantity > 0) {
-    activeStep = 'partial';
+  type FlowNode = {
+    id: string;
+    type: 'create' | 'stock_out' | 'revoke_out' | 'full_out' | 'cancel' | 'paid';
+    title: string;
+    subtitle?: string;
+    date: string;
+    quantity?: number;
+    isCurrent: boolean;
+    isDone: boolean;
+    isCancelled?: boolean;
+  };
+
+  const nodes: FlowNode[] = [];
+  const createLog = logs.find((l) => l.type === 'create');
+
+  if (createLog || bill) {
+    nodes.push({
+      id: 'create',
+      type: 'create',
+      title: '创建账单',
+      subtitle: `${bill.quantity} 件 ${bill.customerName}`,
+      date: createLog?.createdAt || bill.createdAt,
+      isCurrent: false,
+      isDone: true,
+    });
   }
 
-  const activeIndex = steps.findIndex((s) => s.key === activeStep);
+  let runningQty = 0;
+  const sortedOutLogs = [...stockOutLogs].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
 
-  const getStepStyle = (idx: number, key: StepKey) => {
-    const isActive = idx === activeIndex;
-    const isDone = idx < activeIndex || key === 'paid' && bill.status === 'paid' || key === 'cancelled' && bill.status === 'cancelled';
-    if (key === 'revoked') {
-      const isRevokeActive = activeStep === 'revoked';
+  sortedOutLogs.forEach((log, idx) => {
+    runningQty += log.quantity || 0;
+    const isFull = runningQty >= bill.quantity;
+    const isLast = idx === sortedOutLogs.length - 1;
+    nodes.push({
+      id: `out-${log.id}`,
+      type: isFull && isLast ? 'full_out' : 'stock_out',
+      title: isFull && isLast ? '全部出库' : `第 ${idx + 1} 次出库`,
+      subtitle: isFull && isLast ? `${runningQty}/${bill.quantity} 件` : `${runningQty}/${bill.quantity} 件`,
+      date: log.createdAt,
+      quantity: log.quantity,
+      isCurrent: false,
+      isDone: true,
+    });
+  });
+
+  if (stockOuts.length > 0 && stockOutLogs.length === 0) {
+    stockOuts.forEach((out, idx) => {
+      runningQty += out.quantity;
+      const isFull = runningQty >= bill.quantity;
+      const isLast = idx === stockOuts.length - 1;
+      nodes.push({
+        id: `out-hist-${out.id}`,
+        type: isFull && isLast ? 'full_out' : 'stock_out',
+        title: isFull && isLast ? '全部出库' : `第 ${idx + 1} 次出库`,
+        subtitle: isFull && isLast ? `${runningQty}/${bill.quantity} 件` : `${runningQty}/${bill.quantity} 件`,
+        date: out.outDate,
+        quantity: out.quantity,
+        isCurrent: false,
+        isDone: true,
+      });
+    });
+  }
+
+  const sortedRevokeLogs = [...revokedLogs].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
+  let revokedQty = 0;
+  sortedRevokeLogs.forEach((log, idx) => {
+    revokedQty += log.quantity || 0;
+    runningQty -= log.quantity || 0;
+    nodes.push({
+      id: `revoke-${log.id}`,
+      type: 'revoke_out',
+      title: `第 ${idx + 1} 次撤回`,
+      subtitle: `当前库存 ${Math.max(0, runningQty)} 件`,
+      date: log.createdAt,
+      quantity: log.quantity,
+      isCurrent: false,
+      isDone: true,
+    });
+  });
+
+  const cancelLog = logs.find((l) => l.type === 'cancel');
+  if (cancelLog) {
+    nodes.push({
+      id: 'cancel',
+      type: 'cancel',
+      title: '账单已取消',
+      subtitle: cancelLog.remark,
+      date: cancelLog.createdAt,
+      quantity: cancelLog.quantity,
+      isCurrent: false,
+      isDone: true,
+      isCancelled: true,
+    });
+  }
+
+  const paidLog = logs.find((l) => l.type === 'mark_paid');
+  if (paidLog || (!paidLog && bill.status === 'paid' && outQuantity >= bill.quantity)) {
+    nodes.push({
+      id: 'paid',
+      type: 'paid',
+      title: '已收款',
+      subtitle: `¥${bill.finalAmount.toLocaleString()}`,
+      date: paidLog?.createdAt || bill.createdAt,
+      isCurrent: false,
+      isDone: true,
+    });
+  }
+
+  const hasPaidNode = nodes.some((n) => n.type === 'paid');
+  const hasCancelNode = nodes.some((n) => n.type === 'cancel');
+
+  if (nodes.length === 0) {
+    nodes.push({
+      id: 'pending',
+      type: 'create',
+      title: '待出库',
+      subtitle: `${bill.quantity} 件 ${bill.customerName}`,
+      date: bill.createdAt,
+      isCurrent: true,
+      isDone: false,
+    });
+  } else if (!hasCancelNode && !hasPaidNode) {
+    if (nodes[nodes.length - 1].type !== 'full_out' || bill.status === 'unpaid') {
+      if (outQuantity === 0) {
+        nodes.push({
+          id: 'pending-out',
+          type: 'create',
+          title: '待出库',
+          subtitle: `${bill.quantity} 件待出库`,
+          date: new Date().toISOString(),
+          isCurrent: true,
+          isDone: false,
+        });
+      } else if (outQuantity < bill.quantity) {
+        nodes.push({
+          id: 'pending-full',
+          type: 'stock_out',
+          title: '待全部出库',
+          subtitle: `还需出 ${bill.quantity - outQuantity} 件`,
+          date: new Date().toISOString(),
+          isCurrent: true,
+          isDone: false,
+        });
+      } else if (bill.status === 'unpaid') {
+        nodes.push({
+          id: 'pending-paid',
+          type: 'paid',
+          title: '待收款',
+          subtitle: `¥${bill.finalAmount.toLocaleString()}`,
+          date: new Date().toISOString(),
+          isCurrent: true,
+          isDone: false,
+        });
+      }
+    }
+  }
+
+  if (nodes.length > 0) {
+    nodes.forEach((n) => (n.isCurrent = false));
+    const pendingIdx = nodes.findIndex((n) => !n.isDone);
+    if (pendingIdx >= 0) {
+      nodes[pendingIdx].isCurrent = true;
+    } else if (nodes.length > 0) {
+      nodes[nodes.length - 1].isCurrent = true;
+    }
+  }
+
+  const getNodeStyle = (node: FlowNode) => {
+    if (node.isCancelled) {
       return {
-        dot: isRevokeActive
-          ? 'bg-blue-500 text-white'
-          : 'bg-sandalwood-100 text-sandalwood-400',
-        line: 'bg-sandalwood-100',
-        label: isRevokeActive ? 'text-blue-700 font-semibold' : 'text-sandalwood-400',
+        dot: 'bg-red-500 text-white',
+        line: 'bg-red-200',
+        label: 'text-red-700',
       };
     }
-    if (key === 'cancelled') {
-      const isCancelActive = activeStep === 'cancelled';
+    if (node.type === 'revoke_out') {
       return {
-        dot: isCancelActive
+        dot: node.isCurrent
+          ? 'bg-blue-500 text-white ring-4 ring-blue-100 scale-110'
+          : node.isDone
+          ? 'bg-blue-500 text-white'
+          : 'bg-sandalwood-100 text-sandalwood-400',
+        line: node.isDone ? 'bg-blue-300' : 'bg-sandalwood-100',
+        label: node.isCurrent
+          ? 'text-blue-700 font-semibold'
+          : node.isDone
+          ? 'text-blue-700'
+          : 'text-sandalwood-400',
+      };
+    }
+    if (node.type === 'paid') {
+      return {
+        dot: node.isCurrent
+          ? 'bg-teal-500 text-white ring-4 ring-teal-100 scale-110'
+          : node.isDone
+          ? 'bg-teal-500 text-white'
+          : 'bg-sandalwood-100 text-sandalwood-400',
+        line: node.isDone ? 'bg-teal-300' : 'bg-sandalwood-100',
+        label: node.isCurrent
+          ? 'text-teal-700 font-semibold'
+          : node.isDone
+          ? 'text-teal-700'
+          : 'text-sandalwood-400',
+      };
+    }
+    if (node.type === 'cancel') {
+      return {
+        dot: node.isDone
           ? 'bg-red-500 text-white'
           : 'bg-sandalwood-100 text-sandalwood-400',
-        line: 'bg-sandalwood-100',
-        label: isCancelActive ? 'text-red-700 font-semibold' : 'text-sandalwood-400',
+        line: 'bg-red-200',
+        label: node.isDone ? 'text-red-700' : 'text-sandalwood-400',
       };
     }
     return {
-      dot: isActive
-        ? 'bg-gold-500 text-white'
-        : isDone
+      dot: node.isCurrent
+        ? 'bg-gold-500 text-white ring-4 ring-gold-100 scale-110'
+        : node.isDone
         ? 'bg-teal-500 text-white'
         : 'bg-sandalwood-100 text-sandalwood-400',
-      line: isDone ? 'bg-teal-300' : 'bg-sandalwood-100',
-      label: isActive
+      line: node.isDone ? 'bg-teal-300' : 'bg-sandalwood-100',
+      label: node.isCurrent
         ? 'text-gold-700 font-semibold'
-        : isDone
+        : node.isDone
         ? 'text-teal-700'
         : 'text-sandalwood-400',
     };
   };
 
-  const isLinear = activeStep !== 'revoked' && activeStep !== 'cancelled';
-  const displaySteps = isLinear
-    ? steps.filter((s) => s.key !== 'revoked' && s.key !== 'cancelled')
-    : activeStep === 'revoked'
-    ? [steps[0], steps[1], steps[2], steps[4]]
-    : [steps[0], steps[5]];
+  const getNodeIcon = (type: FlowNode['type']) => {
+    switch (type) {
+      case 'create':
+        return FileText;
+      case 'stock_out':
+      case 'full_out':
+        return PackageOpen;
+      case 'revoke_out':
+        return Undo2;
+      case 'cancel':
+        return X;
+      case 'paid':
+        return DollarSign;
+    }
+  };
 
   return (
     <div className="bg-sandalwood-50 rounded-xl p-4 border border-sandalwood-100">
-      <div className="flex items-center justify-between gap-1 overflow-x-auto pb-1">
-        {displaySteps.map((step, idx) => {
-          const style = getStepStyle(
-            steps.findIndex((s) => s.key === step.key),
-            step.key
-          );
-          const isLast = idx === displaySteps.length - 1;
-          const isCurrentStep = step.key === activeStep;
+      <div className="flex items-start gap-1 overflow-x-auto pb-2">
+        {nodes.map((node, idx) => {
+          const style = getNodeStyle(node);
+          const Icon = getNodeIcon(node.type);
+          const isLast = idx === nodes.length - 1;
+          const isCancelledPath = nodes.some((n) => n.type === 'cancel') && idx > nodes.findIndex((n) => n.type === 'cancel');
+          if (isCancelledPath) return null;
+
           return (
-            <div key={step.key} className="flex items-center flex-shrink-0">
-              <div className="flex flex-col items-center gap-1.5 min-w-[64px]">
+            <div key={node.id} className="flex items-start flex-shrink-0">
+              <div className="flex flex-col items-center gap-1.5 min-w-[80px] md:min-w-[90px]">
                 <div
-                  className={`w-9 h-9 rounded-full flex items-center justify-center shadow-sm transition-all ${style.dot} ${isCurrentStep ? 'ring-4 ring-gold-100 scale-110' : ''}`}
+                  className={`w-9 h-9 rounded-full flex items-center justify-center shadow-sm transition-all ${style.dot}`}
                 >
-                  <step.icon className="w-4 h-4" />
+                  <Icon className="w-4 h-4" />
                 </div>
-                <span className={`text-xs whitespace-nowrap ${style.label}`}>
-                  {step.label}
+                <span className={`text-xs whitespace-nowrap text-center leading-tight ${style.label}`}>
+                  {node.title}
                 </span>
-                {step.key === 'partial' && outQuantity > 0 && (
+                {node.quantity !== undefined && node.type !== 'cancel' && (
                   <span className="text-[10px] text-sandalwood-500 -mt-0.5">
-                    {outQuantity}/{bill.quantity}件
+                    {node.type === 'revoke_out' ? '撤回 ' : '出 '}
+                    <b className={node.type === 'revoke_out' ? 'text-blue-600' : 'text-sandalwood-700'}>
+                      {node.type === 'revoke_out' ? '+' : ''}{node.quantity}
+                    </b>
+                    {node.type !== 'revoke_out' ? '件' : '件'}
                   </span>
                 )}
-                {step.key === 'full' && outQuantity >= bill.quantity && bill.quantity > 0 && (
-                  <span className="text-[10px] text-sandalwood-500 -mt-0.5">
-                    {outQuantity}件
+                {node.subtitle && (
+                  <span className="text-[10px] text-sandalwood-500 -mt-0.5 text-center leading-tight max-w-[90px]">
+                    {node.subtitle}
                   </span>
                 )}
-                {isCurrentStep && latestLog && (
-                  <span className="text-[10px] text-sandalwood-500 -mt-0.5">
-                    {new Date(latestLog.createdAt).toLocaleDateString('zh-CN', {
+                {node.isDone && !node.isCurrent && !node.isCancelled && (
+                  <span className="text-[10px] text-sandalwood-400 -mt-0.5">
+                    {new Date(node.date).toLocaleDateString('zh-CN', {
                       month: '2-digit',
                       day: '2-digit',
-                      hour: '2-digit',
-                      minute: '2-digit',
                     })}
                   </span>
                 )}
+                {node.isCurrent && (
+                  <span className="text-[10px] text-gold-600 -mt-0.5">
+                    当前
+                  </span>
+                )}
               </div>
-              {!isLast && (
+              {!isLast && !nodes.some((n) => n.type === 'cancel' && nodes.indexOf(n) === idx) && (
                 <div
-                  className={`w-6 md:w-10 h-0.5 mx-0.5 md:mx-1 -mt-4 ${style.line}`}
+                  className={`w-6 md:w-10 h-0.5 mx-0.5 md:mx-1 mt-5 ${style.line}`}
                 />
               )}
             </div>
