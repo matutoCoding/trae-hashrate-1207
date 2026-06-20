@@ -9,30 +9,46 @@ import {
   Clock,
   X,
   Eye,
-  ArrowRight,
   MapPin,
+  Edit3,
+  Save,
+  History,
+  ArrowUpDown,
 } from 'lucide-react';
 import { useBatchStore } from '@/store/useBatchStore';
 import { useStockOutStore } from '@/store/useStockOutStore';
 import { useMaintenanceStore } from '@/store/useMaintenanceStore';
+import { useBatchTransactionStore, getTransactionTypeLabel } from '@/store/useBatchTransactionStore';
 import { instrumentTypes } from '@/utils/mock';
 import { getDaysUntilExpiry, formatDate } from '@/utils/date';
 import type { Batch } from '@/types';
 
 export default function Batches() {
-  const { getBatchesWithStatus, addBatch, getBatchWithStatusById } = useBatchStore();
+  const { getBatchesWithStatus, addBatch, getBatchWithStatusById, updateBatch } = useBatchStore();
   const { getStockOutsByBatch, getDestinationDistributionByBatch, getTotalOutQuantityByBatch } = useStockOutStore();
   const { getMaintenancesByBatch } = useMaintenanceStore();
+  const { getTransactionsByBatch } = useBatchTransactionStore();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedBatch, setSelectedBatch] = useState<Batch | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [detailTab, setDetailTab] = useState<'overview' | 'transactions'>('overview');
 
   const batches = getBatchesWithStatus();
 
   const [formData, setFormData] = useState({
+    batchNo: '',
+    instrumentType: '钢琴',
+    instrumentName: '',
+    totalQuantity: 0,
+    manufactureDate: '',
+    expiryDate: '',
+  });
+
+  const [editFormData, setEditFormData] = useState({
     batchNo: '',
     instrumentType: '钢琴',
     instrumentName: '',
@@ -93,7 +109,67 @@ export default function Batches() {
     const batchWithStatus = getBatchWithStatusById(batch.id);
     if (batchWithStatus) {
       setSelectedBatch(batchWithStatus);
+      setIsEditing(false);
+      setDetailTab('overview');
+      setEditFormData({
+        batchNo: batchWithStatus.batchNo,
+        instrumentType: batchWithStatus.instrumentType,
+        instrumentName: batchWithStatus.instrumentName,
+        totalQuantity: batchWithStatus.totalQuantity,
+        manufactureDate: batchWithStatus.manufactureDate,
+        expiryDate: batchWithStatus.expiryDate,
+      });
     }
+  };
+
+  const startEditing = () => {
+    if (selectedBatch) {
+      setEditFormData({
+        batchNo: selectedBatch.batchNo,
+        instrumentType: selectedBatch.instrumentType,
+        instrumentName: selectedBatch.instrumentName,
+        totalQuantity: selectedBatch.totalQuantity,
+        manufactureDate: selectedBatch.manufactureDate,
+        expiryDate: selectedBatch.expiryDate,
+      });
+      setIsEditing(true);
+    }
+  };
+
+  const handleEditSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedBatch) return;
+
+    const usedQuantity = selectedBatch.totalQuantity - selectedBatch.remainingQuantity;
+    if (editFormData.totalQuantity < usedQuantity) {
+      alert(`总数量不能小于已出库数量（${usedQuantity}件）`);
+      return;
+    }
+
+    const updated = updateBatch(selectedBatch.id, {
+      batchNo: editFormData.batchNo,
+      instrumentType: editFormData.instrumentType,
+      instrumentName: editFormData.instrumentName,
+      totalQuantity: editFormData.totalQuantity,
+      manufactureDate: editFormData.manufactureDate,
+      expiryDate: editFormData.expiryDate,
+    });
+
+    if (updated) {
+      setSelectedBatch(updated);
+    }
+    setIsEditing(false);
+  };
+
+  const formatDateTime = (isoString: string) => {
+    const date = new Date(isoString);
+    return date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   };
 
   return (
@@ -274,218 +350,464 @@ export default function Batches() {
 
       {selectedBatch && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-slide-up">
+          <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto animate-slide-up">
             <div className="p-6 border-b border-sandalwood-100 flex items-center justify-between">
               <h2 className="text-xl font-serif font-bold text-sandalwood-900">
                 批次详情
               </h2>
-              <button
-                onClick={() => setSelectedBatch(null)}
-                className="text-sandalwood-400 hover:text-sandalwood-600"
-              >
-                <X className="w-6 h-6" />
-              </button>
+              <div className="flex items-center gap-2">
+                {!isEditing && (
+                  <button
+                    onClick={startEditing}
+                    className="btn btn-secondary btn-sm gap-2"
+                  >
+                    <Edit3 className="w-4 h-4" />
+                    编辑
+                  </button>
+                )}
+                <button
+                  onClick={() => setSelectedBatch(null)}
+                  className="text-sandalwood-400 hover:text-sandalwood-600"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
             </div>
 
             <div className="p-6">
-              <div className="flex items-center gap-4 mb-6">
-                <div
-                  className={`w-16 h-16 rounded-2xl flex items-center justify-center ${
-                    selectedBatch.status === 'normal'
-                      ? 'bg-teal-100 text-teal-700'
-                      : selectedBatch.status === 'warning'
-                      ? 'bg-gold-100 text-gold-700'
-                      : 'bg-red-100 text-red-700'
-                  }`}
-                >
-                  <Package className="w-8 h-8" />
+              <div className="border-b border-sandalwood-100 mb-6">
+                <div className="flex gap-6">
+                  <button
+                    onClick={() => setDetailTab('overview')}
+                    className={`pb-3 px-1 border-b-2 font-medium text-sm transition-colors ${
+                      detailTab === 'overview'
+                        ? 'border-gold-500 text-gold-600'
+                        : 'border-transparent text-sandalwood-500 hover:text-sandalwood-700'
+                    }`}
+                  >
+                    概览信息
+                  </button>
+                  <button
+                    onClick={() => setDetailTab('transactions')}
+                    className={`pb-3 px-1 border-b-2 font-medium text-sm transition-colors ${
+                      detailTab === 'transactions'
+                        ? 'border-gold-500 text-gold-600'
+                        : 'border-transparent text-sandalwood-500 hover:text-sandalwood-700'
+                    }`}
+                  >
+                    <History className="w-4 h-4 inline mr-1" />
+                    库存流水
+                    <span className="ml-1 text-xs bg-sandalwood-100 text-sandalwood-600 px-2 py-0.5 rounded-full">
+                      {getTransactionsByBatch(selectedBatch.id).length}
+                    </span>
+                  </button>
                 </div>
+              </div>
+
+              {detailTab === 'overview' && (
+                <>
+                  {isEditing ? (
+                    <form onSubmit={handleEditSubmit} className="space-y-4 mb-6">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="label">批次编号</label>
+                          <input
+                            type="text"
+                            className="input"
+                            value={editFormData.batchNo}
+                            onChange={(e) =>
+                              setEditFormData({ ...editFormData, batchNo: e.target.value })
+                            }
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="label">乐器类型</label>
+                          <select
+                            className="input"
+                            value={editFormData.instrumentType}
+                            onChange={(e) =>
+                              setEditFormData({ ...editFormData, instrumentType: e.target.value })
+                            }
+                          >
+                            {instrumentTypes.map((type) => (
+                              <option key={type} value={type}>
+                                {type}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="label">乐器名称</label>
+                        <input
+                          type="text"
+                          className="input"
+                          value={editFormData.instrumentName}
+                          onChange={(e) =>
+                            setEditFormData({ ...editFormData, instrumentName: e.target.value })
+                          }
+                          required
+                        />
+                      </div>
+
+                      <div>
+                        <label className="label">总数量（已出库{selectedBatch.totalQuantity - selectedBatch.remainingQuantity}件）</label>
+                        <input
+                          type="number"
+                          className="input"
+                          min={selectedBatch.totalQuantity - selectedBatch.remainingQuantity}
+                          value={editFormData.totalQuantity}
+                          onChange={(e) =>
+                            setEditFormData({
+                              ...editFormData,
+                              totalQuantity: Number(e.target.value),
+                            })
+                          }
+                          required
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="label">生产日期</label>
+                          <input
+                            type="date"
+                            className="input"
+                            value={editFormData.manufactureDate}
+                            onChange={(e) =>
+                              setEditFormData({
+                                ...editFormData,
+                                manufactureDate: e.target.value,
+                              })
+                            }
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="label">有效期至</label>
+                          <input
+                            type="date"
+                            className="input"
+                            value={editFormData.expiryDate}
+                            onChange={(e) =>
+                              setEditFormData({
+                                ...editFormData,
+                                expiryDate: e.target.value,
+                              })
+                            }
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setIsEditing(false)}
+                          className="btn btn-secondary flex-1"
+                        >
+                          取消编辑
+                        </button>
+                        <button type="submit" className="btn btn-primary flex-1 gap-2">
+                          <Save className="w-4 h-4" />
+                          保存修改
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <div className="flex items-center gap-4 mb-6">
+                      <div
+                        className={`w-16 h-16 rounded-2xl flex items-center justify-center ${
+                          selectedBatch.status === 'normal'
+                            ? 'bg-teal-100 text-teal-700'
+                            : selectedBatch.status === 'warning'
+                            ? 'bg-gold-100 text-gold-700'
+                            : 'bg-red-100 text-red-700'
+                        }`}
+                      >
+                        <Package className="w-8 h-8" />
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-semibold text-sandalwood-900">
+                          {selectedBatch.instrumentName}
+                        </h3>
+                        <p className="text-sandalwood-500">{selectedBatch.batchNo} · {selectedBatch.instrumentType}</p>
+                        <div className="mt-1">
+                          {getStatusBadge(selectedBatch.status)}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {!isEditing && (
+                    <>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                        <div className="bg-sandalwood-50 rounded-xl p-4 text-center">
+                          <p className="text-xs text-sandalwood-500 mb-1">总数量</p>
+                          <p className="text-2xl font-bold text-sandalwood-900">
+                            {selectedBatch.totalQuantity}
+                          </p>
+                        </div>
+                        <div className="bg-teal-50 rounded-xl p-4 text-center">
+                          <p className="text-xs text-teal-600 mb-1">剩余数量</p>
+                          <p className="text-2xl font-bold text-teal-700">
+                            {selectedBatch.remainingQuantity}
+                          </p>
+                        </div>
+                        <div className="bg-gold-50 rounded-xl p-4 text-center">
+                          <p className="text-xs text-gold-600 mb-1">已出库</p>
+                          <p className="text-2xl font-bold text-gold-700">
+                            {selectedBatch.totalQuantity -
+                              selectedBatch.remainingQuantity}
+                          </p>
+                        </div>
+                        <div className="bg-sandalwood-50 rounded-xl p-4 text-center">
+                          <p className="text-xs text-sandalwood-500 mb-1">出库率</p>
+                          <p className="text-2xl font-bold text-sandalwood-900">
+                            {getUsagePercent(selectedBatch).toFixed(0)}%
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4 mb-6">
+                        <div className="card p-4">
+                          <p className="text-sm text-sandalwood-500 mb-1">生产日期</p>
+                          <p className="font-medium text-sandalwood-900">
+                            {selectedBatch.manufactureDate}
+                          </p>
+                        </div>
+                        <div className="card p-4">
+                          <p className="text-sm text-sandalwood-500 mb-1">有效期至</p>
+                          <p className="font-medium text-sandalwood-900">
+                            {selectedBatch.expiryDate}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mb-6">
+                        <h4 className="font-medium text-sandalwood-900 mb-3 flex items-center gap-2">
+                          <MapPin className="w-4 h-4" />
+                          去向分布
+                        </h4>
+                        <div className="space-y-2">
+                          {getDestinationDistributionByBatch(selectedBatch.id).length > 0 ? (
+                            getDestinationDistributionByBatch(selectedBatch.id).map((item, index) => {
+                              const totalOut = getTotalOutQuantityByBatch(selectedBatch.id);
+                              const percent = (item.quantity / totalOut) * 100;
+                              const colors = [
+                                'bg-teal-500',
+                                'bg-gold-500',
+                                'bg-sandalwood-500',
+                                'bg-red-500',
+                                'bg-blue-500',
+                              ];
+                              return (
+                                <div key={index}>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="text-sm text-sandalwood-700">
+                                      {item.destination}
+                                    </span>
+                                    <span className="text-sm font-medium text-sandalwood-900">
+                                      {item.quantity} 件
+                                    </span>
+                                  </div>
+                                  <div className="h-2 bg-sandalwood-100 rounded-full overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full ${colors[index % colors.length]}`}
+                                      style={{ width: `${percent}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })
+                          ) : (
+                            <p className="text-sm text-sandalwood-400 text-center py-4">
+                              暂无去向数据
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mb-6">
+                        <h4 className="font-medium text-sandalwood-900 mb-3 flex items-center gap-2">
+                          <Eye className="w-4 h-4" />
+                          出库记录
+                          <span className="text-sm text-sandalwood-400 font-normal">
+                            (共 {getStockOutsByBatch(selectedBatch.id).length} 条)
+                          </span>
+                        </h4>
+                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                          {getStockOutsByBatch(selectedBatch.id).length > 0 ? (
+                            getStockOutsByBatch(selectedBatch.id).map((out) => (
+                              <div
+                                key={out.id}
+                                className="flex items-center justify-between p-3 bg-sandalwood-50 rounded-lg"
+                              >
+                                <div>
+                                  <p className="text-sm font-medium text-sandalwood-900">
+                                    {out.destination}
+                                  </p>
+                                  <p className="text-xs text-sandalwood-500">
+                                    {out.outDate} · {out.receiver}
+                                    {out.billId && ' · 关联账单'}
+                                  </p>
+                                </div>
+                                <span className="text-sm font-semibold text-sandalwood-700">
+                                  -{out.quantity} 件
+                                </span>
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-sm text-sandalwood-400 text-center py-4">
+                              暂无出库记录
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div>
+                        <h4 className="font-medium text-sandalwood-900 mb-3 flex items-center gap-2">
+                          <Clock className="w-4 h-4" />
+                          保养记录
+                          <span className="text-sm text-sandalwood-400 font-normal">
+                            (共 {getMaintenancesByBatch(selectedBatch.id).length} 条)
+                          </span>
+                        </h4>
+                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                          {getMaintenancesByBatch(selectedBatch.id).length > 0 ? (
+                            getMaintenancesByBatch(selectedBatch.id).map((mt) => (
+                              <div
+                                key={mt.id}
+                                className="flex items-center justify-between p-3 bg-sandalwood-50 rounded-lg"
+                              >
+                                <div>
+                                  <p className="text-sm font-medium text-sandalwood-900">
+                                    {mt.type === 'tuning'
+                                      ? '调律'
+                                      : mt.type === 'repair'
+                                      ? '维修'
+                                      : '清洁'}
+                                  </p>
+                                  <p className="text-xs text-sandalwood-500">
+                                    {mt.scheduledDate} · {mt.operator}
+                                  </p>
+                                </div>
+                                <span
+                                  className={`badge ${
+                                    mt.status === 'completed'
+                                      ? 'badge-success'
+                                      : mt.status === 'pending'
+                                      ? 'badge-warning'
+                                      : 'badge-neutral'
+                                  }`}
+                                >
+                                  {mt.status === 'completed'
+                                    ? '已完成'
+                                    : mt.status === 'pending'
+                                    ? '待处理'
+                                    : '已取消'}
+                                </span>
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-sm text-sandalwood-400 text-center py-4">
+                              暂无保养记录
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+
+              {detailTab === 'transactions' && (
                 <div>
-                  <h3 className="text-xl font-semibold text-sandalwood-900">
-                    {selectedBatch.instrumentName}
-                  </h3>
-                  <p className="text-sandalwood-500">{selectedBatch.batchNo}</p>
-                  <div className="mt-1">
-                    {getStatusBadge(selectedBatch.status)}
+                  <div className="mb-4 flex items-center justify-between">
+                    <p className="text-sm text-sandalwood-500">
+                      显示所有影响该批次库存的操作记录，最新在最前
+                    </p>
+                  </div>
+                  <div className="space-y-3">
+                    {getTransactionsByBatch(selectedBatch.id).length > 0 ? (
+                      getTransactionsByBatch(selectedBatch.id).map((tx) => (
+                        <div
+                          key={tx.id}
+                          className="border border-sandalwood-100 rounded-xl p-4"
+                        >
+                          <div className="flex items-start justify-between mb-2">
+                            <div className="flex items-center gap-3">
+                              <div
+                                className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                                  tx.type === 'create'
+                                    ? 'bg-teal-100 text-teal-700'
+                                    : tx.type === 'edit'
+                                    ? 'bg-sandalwood-100 text-sandalwood-700'
+                                    : tx.type === 'stock_out'
+                                    ? 'bg-gold-100 text-gold-700'
+                                    : tx.type === 'revoke_out'
+                                    ? 'bg-blue-100 text-blue-700'
+                                    : 'bg-red-100 text-red-700'
+                                }`}
+                              >
+                                <ArrowUpDown className="w-5 h-5" />
+                              </div>
+                              <div>
+                                <p className="font-medium text-sandalwood-900">
+                                  {getTransactionTypeLabel(tx.type)}
+                                </p>
+                                <p className="text-xs text-sandalwood-500">
+                                  {formatDateTime(tx.createdAt)} · {tx.operator}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              {tx.quantityChange !== 0 && (
+                                <p
+                                  className={`font-bold ${
+                                    tx.quantityChange > 0
+                                      ? 'text-teal-600'
+                                      : 'text-red-600'
+                                  }`}
+                                >
+                                  {tx.quantityChange > 0 ? '+' : ''}
+                                  {tx.quantityChange} 件
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          {tx.remark && (
+                            <p className="text-sm text-sandalwood-600 mb-2 pl-13 ml-13">
+                              {tx.remark}
+                            </p>
+                          )}
+                          <div className="flex gap-4 text-xs text-sandalwood-500 pl-13 ml-13 flex-wrap">
+                            <span>
+                              总数量: {tx.totalBefore} →{' '}
+                              <span className="font-medium text-sandalwood-700">
+                                {tx.totalAfter}
+                              </span>
+                            </span>
+                            <span>
+                              剩余量: {tx.remainingBefore} →{' '}
+                              <span className="font-medium text-teal-700">
+                                {tx.remainingAfter}
+                              </span>
+                            </span>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="card p-12 text-center">
+                        <History className="w-16 h-16 text-sandalwood-300 mx-auto mb-4" />
+                        <p className="text-sandalwood-500">暂无流水记录</p>
+                      </div>
+                    )}
                   </div>
                 </div>
-              </div>
-
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                <div className="bg-sandalwood-50 rounded-xl p-4 text-center">
-                  <p className="text-xs text-sandalwood-500 mb-1">总数量</p>
-                  <p className="text-2xl font-bold text-sandalwood-900">
-                    {selectedBatch.totalQuantity}
-                  </p>
-                </div>
-                <div className="bg-teal-50 rounded-xl p-4 text-center">
-                  <p className="text-xs text-teal-600 mb-1">剩余数量</p>
-                  <p className="text-2xl font-bold text-teal-700">
-                    {selectedBatch.remainingQuantity}
-                  </p>
-                </div>
-                <div className="bg-gold-50 rounded-xl p-4 text-center">
-                  <p className="text-xs text-gold-600 mb-1">已出库</p>
-                  <p className="text-2xl font-bold text-gold-700">
-                    {selectedBatch.totalQuantity -
-                      selectedBatch.remainingQuantity}
-                  </p>
-                </div>
-                <div className="bg-sandalwood-50 rounded-xl p-4 text-center">
-                  <p className="text-xs text-sandalwood-500 mb-1">出库率</p>
-                  <p className="text-2xl font-bold text-sandalwood-900">
-                    {getUsagePercent(selectedBatch).toFixed(0)}%
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 mb-6">
-                <div className="card p-4">
-                  <p className="text-sm text-sandalwood-500 mb-1">生产日期</p>
-                  <p className="font-medium text-sandalwood-900">
-                    {selectedBatch.manufactureDate}
-                  </p>
-                </div>
-                <div className="card p-4">
-                  <p className="text-sm text-sandalwood-500 mb-1">有效期至</p>
-                  <p className="font-medium text-sandalwood-900">
-                    {selectedBatch.expiryDate}
-                  </p>
-                </div>
-              </div>
-
-              <div className="mb-6">
-                <h4 className="font-medium text-sandalwood-900 mb-3 flex items-center gap-2">
-                  <MapPin className="w-4 h-4" />
-                  去向分布
-                </h4>
-                <div className="space-y-2">
-                  {getDestinationDistributionByBatch(selectedBatch.id).length > 0 ? (
-                    getDestinationDistributionByBatch(selectedBatch.id).map((item, index) => {
-                      const totalOut = getTotalOutQuantityByBatch(selectedBatch.id);
-                      const percent = (item.quantity / totalOut) * 100;
-                      const colors = [
-                        'bg-teal-500',
-                        'bg-gold-500',
-                        'bg-sandalwood-500',
-                        'bg-red-500',
-                        'bg-blue-500',
-                      ];
-                      return (
-                        <div key={index}>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-sm text-sandalwood-700">
-                              {item.destination}
-                            </span>
-                            <span className="text-sm font-medium text-sandalwood-900">
-                              {item.quantity} 件
-                            </span>
-                          </div>
-                          <div className="h-2 bg-sandalwood-100 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${colors[index % colors.length]}`}
-                              style={{ width: `${percent}%` }}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <p className="text-sm text-sandalwood-400 text-center py-4">
-                      暂无去向数据
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div className="mb-6">
-                <h4 className="font-medium text-sandalwood-900 mb-3 flex items-center gap-2">
-                  <Eye className="w-4 h-4" />
-                  出库记录
-                  <span className="text-sm text-sandalwood-400 font-normal">
-                    (共 {getStockOutsByBatch(selectedBatch.id).length} 条)
-                  </span>
-                </h4>
-                <div className="space-y-2 max-h-48 overflow-y-auto">
-                  {getStockOutsByBatch(selectedBatch.id).length > 0 ? (
-                    getStockOutsByBatch(selectedBatch.id).map((out) => (
-                      <div
-                        key={out.id}
-                        className="flex items-center justify-between p-3 bg-sandalwood-50 rounded-lg"
-                      >
-                        <div>
-                          <p className="text-sm font-medium text-sandalwood-900">
-                            {out.destination}
-                          </p>
-                          <p className="text-xs text-sandalwood-500">
-                            {out.outDate} · {out.receiver}
-                            {out.billId && ' · 关联账单'}
-                          </p>
-                        </div>
-                        <span className="text-sm font-semibold text-sandalwood-700">
-                          -{out.quantity} 件
-                        </span>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-sm text-sandalwood-400 text-center py-4">
-                      暂无出库记录
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <h4 className="font-medium text-sandalwood-900 mb-3 flex items-center gap-2">
-                  <Clock className="w-4 h-4" />
-                  保养记录
-                  <span className="text-sm text-sandalwood-400 font-normal">
-                    (共 {getMaintenancesByBatch(selectedBatch.id).length} 条)
-                  </span>
-                </h4>
-                <div className="space-y-2 max-h-48 overflow-y-auto">
-                  {getMaintenancesByBatch(selectedBatch.id).length > 0 ? (
-                    getMaintenancesByBatch(selectedBatch.id).map((mt) => (
-                      <div
-                        key={mt.id}
-                        className="flex items-center justify-between p-3 bg-sandalwood-50 rounded-lg"
-                      >
-                        <div>
-                          <p className="text-sm font-medium text-sandalwood-900">
-                            {mt.type === 'tuning'
-                              ? '调律'
-                              : mt.type === 'repair'
-                              ? '维修'
-                              : '清洁'}
-                          </p>
-                          <p className="text-xs text-sandalwood-500">
-                            {mt.scheduledDate} · {mt.operator}
-                          </p>
-                        </div>
-                        <span
-                          className={`badge ${
-                            mt.status === 'completed'
-                              ? 'badge-success'
-                              : mt.status === 'pending'
-                              ? 'badge-warning'
-                              : 'badge-neutral'
-                          }`}
-                        >
-                          {mt.status === 'completed'
-                            ? '已完成'
-                            : mt.status === 'pending'
-                            ? '待处理'
-                            : '已取消'}
-                        </span>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-sm text-sandalwood-400 text-center py-4">
-                      暂无保养记录
-                    </p>
-                  )}
-                </div>
-              </div>
+              )}
             </div>
           </div>
         </div>

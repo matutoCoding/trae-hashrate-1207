@@ -8,10 +8,12 @@ export function formatDate(dateString: string): string {
 
 export function calculateDays(startDate: string, endDate: string): number {
   const start = new Date(startDate);
+  start.setHours(0, 0, 0, 0);
   const end = new Date(endDate);
-  const diffTime = Math.abs(end.getTime() - start.getTime());
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  return diffDays === 0 ? 1 : diffDays;
+  end.setHours(0, 0, 0, 0);
+  const diffTime = end.getTime() - start.getTime();
+  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+  return diffDays + 1;
 }
 
 export function getDaysUntilExpiry(expiryDate: string): number {

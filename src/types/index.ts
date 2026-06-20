@@ -68,3 +68,44 @@ export interface PricingResult {
   finalAmount: number;
   pricingType: 'normal' | 'starting' | 'cap';
 }
+
+export type BatchTransactionType = 
+  | 'create' 
+  | 'edit' 
+  | 'stock_out' 
+  | 'revoke_out' 
+  | 'bill_cancel'
+  | 'adjustment';
+
+export interface BatchTransaction {
+  id: string;
+  batchId: string;
+  type: BatchTransactionType;
+  quantityChange: number;
+  totalQuantityChange: number;
+  remainingBefore: number;
+  remainingAfter: number;
+  totalBefore: number;
+  totalAfter: number;
+  referenceId: string | null;
+  remark: string;
+  operator: string;
+  createdAt: string;
+}
+
+export type BillFulfillmentType = 
+  | 'create'
+  | 'stock_out'
+  | 'revoke_out'
+  | 'cancel'
+  | 'mark_paid';
+
+export interface BillFulfillmentLog {
+  id: string;
+  billId: string;
+  type: BillFulfillmentType;
+  quantity: number;
+  remark: string;
+  operator: string;
+  createdAt: string;
+}

@@ -14,11 +14,16 @@ import {
   CheckCircle,
   Undo2,
   ArrowRight,
+  Clock,
+  History,
+  Circle,
 } from 'lucide-react';
 import { useBillStore } from '@/store/useBillStore';
 import { useBatchStore } from '@/store/useBatchStore';
 import { useBillingRuleStore } from '@/store/useBillingRuleStore';
 import { useStockOutStore } from '@/store/useStockOutStore';
+import { useBillFulfillmentStore, getFulfillmentTypeLabel } from '@/store/useBillFulfillmentStore';
+import type { BillFulfillmentLog } from '@/types';
 import {
   formatCurrency,
   getPricingTypeLabel,
@@ -28,7 +33,7 @@ import { calculateDays, getTodayString } from '@/utils/date';
 import type { Bill } from '@/types';
 
 export default function Bills() {
-  const { bills, addBill, updateBillStatus, getBillById, deleteBill } =
+  const { bills, addBill, updateBillStatus, getBillById, deleteBill, cancelBill } =
     useBillStore();
   const { getBatchesWithStatus, getBatchById } = useBatchStore();
   const { getActiveRules, getRulesByInstrumentType } = useBillingRuleStore();
@@ -38,6 +43,7 @@ export default function Bills() {
     getTotalOutQuantityByBill,
     revokeStockOut,
   } = useStockOutStore();
+  const { getLogsByBill } = useBillFulfillmentStore();
 
   const batches = getBatchesWithStatus();
 
@@ -292,13 +298,11 @@ export default function Bills() {
       ) {
         return;
       }
-      billStockOuts.forEach((out) => {
-        revokeStockOut(out.id);
-      });
+    } else {
+      if (!confirm('确定要取消该账单吗？')) return;
     }
 
-    updateBillStatus(selectedBill.id, 'cancelled');
-    const updated = getBillById(selectedBill.id);
+    const updated = cancelBill(selectedBill.id);
     if (updated) setSelectedBill(updated);
   };
 
@@ -317,6 +321,46 @@ export default function Bills() {
   const billOutQuantity = selectedBill
     ? getTotalOutQuantityByBill(selectedBill.id)
     : 0;
+  const fulfillmentLogs = selectedBill
+    ? getLogsByBill(selectedBill.id)
+    : [];
+
+  const getFulfillmentLogStyle = (type: BillFulfillmentLog['type']) => {
+    const styles = {
+      create: {
+        dot: 'bg-teal-500',
+        line: 'bg-teal-200',
+        badge: 'bg-teal-50 text-teal-700 border-teal-200',
+      },
+      stock_out: {
+        dot: 'bg-gold-500',
+        line: 'bg-gold-200',
+        badge: 'bg-gold-50 text-gold-700 border-gold-200',
+      },
+      revoke_out: {
+        dot: 'bg-blue-500',
+        line: 'bg-blue-200',
+        badge: 'bg-blue-50 text-blue-700 border-blue-200',
+      },
+      cancel: {
+        dot: 'bg-red-500',
+        line: 'bg-red-200',
+        badge: 'bg-red-50 text-red-700 border-red-200',
+      },
+      mark_paid: {
+        dot: 'bg-emerald-500',
+        line: 'bg-emerald-200',
+        badge: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      },
+    };
+    return styles[type];
+  };
+
+  const formatDateTime = (isoString: string) => {
+    const d = new Date(isoString);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
 
   return (
     <div className="p-4 md:p-6 lg:p-8 max-w-7xl mx-auto">
@@ -612,6 +656,68 @@ export default function Bills() {
                 ) : (
                   <p className="text-sm text-sandalwood-400 text-center py-4">
                     暂无出库记录
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-medium text-sandalwood-900 flex items-center gap-2">
+                    <History className="w-4 h-4" />
+                    履约进度
+                    <span className="text-sm text-sandalwood-400 font-normal">
+                      (共 {fulfillmentLogs.length} 条流转记录)
+                    </span>
+                  </h3>
+                </div>
+                {fulfillmentLogs.length > 0 ? (
+                  <div className="relative pl-6">
+                    <div className="absolute left-2 top-2 bottom-2 w-0.5 bg-sandalwood-100" />
+                    {fulfillmentLogs.map((log, idx) => {
+                      const style = getFulfillmentLogStyle(log.type);
+                      const isLast = idx === fulfillmentLogs.length - 1;
+                      return (
+                        <div key={log.id} className="relative pb-5 last:pb-0">
+                          <div
+                            className={`absolute -left-4 top-1 w-4 h-4 rounded-full ${style.dot} border-2 border-white shadow-sm flex items-center justify-center`}
+                          >
+                            <Circle className="w-1.5 h-1.5 text-white fill-white" />
+                          </div>
+                          <div
+                            className={`rounded-lg border p-3 ${style.badge}`}
+                          >
+                            <div className="flex items-start justify-between mb-1.5 gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-semibold text-sm">
+                                  {getFulfillmentTypeLabel(log.type)}
+                                </span>
+                                {log.quantity > 0 && (
+                                  <span className="text-xs font-medium bg-white/80 px-2 py-0.5 rounded-full">
+                                    数量: {log.quantity} 件
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1 text-xs opacity-80 flex-shrink-0">
+                                <Clock className="w-3 h-3" />
+                                {formatDateTime(log.createdAt)}
+                              </div>
+                            </div>
+                            {log.remark && (
+                              <p className="text-xs opacity-90 leading-relaxed">
+                                {log.remark}
+                              </p>
+                            )}
+                            <p className="text-xs opacity-60 mt-1.5">
+                              操作人: {log.operator}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-sm text-sandalwood-400 text-center py-4">
+                    暂无履约记录
                   </p>
                 )}
               </div>
