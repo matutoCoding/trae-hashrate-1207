@@ -1,0 +1,125 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url("https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&family=Noto+Serif+SC:wght@400;500;600;700&display=swap");
+
+:root {
+  font-family: "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: #fafaf9;
+  color: #292524;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center px-4 py-2 rounded-lg font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply bg-sandalwood-800 text-white hover:bg-sandalwood-700 focus:ring-sandalwood-500;
+  }
+
+  .btn-secondary {
+    @apply bg-white text-sandalwood-800 border border-sandalwood-200 hover:bg-sandalwood-50 focus:ring-sandalwood-300;
+  }
+
+  .btn-teal {
+    @apply bg-teal-600 text-white hover:bg-teal-500 focus:ring-teal-400;
+  }
+
+  .btn-gold {
+    @apply bg-gold-500 text-white hover:bg-gold-400 focus:ring-gold-300;
+  }
+
+  .btn-danger {
+    @apply bg-red-600 text-white hover:bg-red-500 focus:ring-red-300;
+  }
+
+  .card {
+    @apply bg-white rounded-xl shadow-card border border-sandalwood-100 transition-all duration-300;
+  }
+
+  .card:hover {
+    @apply shadow-card-hover;
+  }
+
+  .input {
+    @apply w-full px-4 py-2 border border-sandalwood-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sandalwood-400 focus:border-transparent transition-all duration-200 bg-white text-sandalwood-900 placeholder-sandalwood-400;
+  }
+
+  .label {
+    @apply block text-sm font-medium text-sandalwood-700 mb-1;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-success {
+    @apply bg-teal-100 text-teal-800;
+  }
+
+  .badge-warning {
+    @apply bg-gold-100 text-gold-800;
+  }
+
+  .badge-danger {
+    @apply bg-red-100 text-red-800;
+  }
+
+  .badge-neutral {
+    @apply bg-sandalwood-100 text-sandalwood-700;
+  }
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f5f5f4;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d6d3d1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a8a29e;
+}
+
+/* 过渡动画 */
+.page-transition {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
