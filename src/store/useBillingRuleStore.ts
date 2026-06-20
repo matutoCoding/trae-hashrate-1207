@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { BillingRule } from '@/types';
 import { mockBillingRules } from '@/utils/mock';
 
@@ -10,45 +11,59 @@ interface BillingRuleState {
   toggleRule: (id: string) => void;
   getRuleById: (id: string) => BillingRule | undefined;
   getActiveRules: () => BillingRule[];
+  getRulesByInstrumentType: (type: string) => BillingRule[];
 }
 
-export const useBillingRuleStore = create<BillingRuleState>((set, get) => ({
-  rules: mockBillingRules,
+export const useBillingRuleStore = create<BillingRuleState>()(
+  persist(
+    (set, get) => ({
+      rules: mockBillingRules,
 
-  addRule: (rule) => {
-    const newRule: BillingRule = {
-      ...rule,
-      id: `rule-${Date.now()}`,
-      createdAt: new Date().toISOString().split('T')[0],
-    };
-    set((state) => ({ rules: [...state.rules, newRule] }));
-  },
+      addRule: (rule) => {
+        const newRule: BillingRule = {
+          ...rule,
+          id: `rule-${Date.now()}`,
+          createdAt: new Date().toISOString().split('T')[0],
+        };
+        set((state) => ({ rules: [...state.rules, newRule] }));
+      },
 
-  updateRule: (id, updates) => {
-    set((state) => ({
-      rules: state.rules.map((r) => (r.id === id ? { ...r, ...updates } : r)),
-    }));
-  },
+      updateRule: (id, updates) => {
+        set((state) => ({
+          rules: state.rules.map((r) =>
+            r.id === id ? { ...r, ...updates } : r
+          ),
+        }));
+      },
 
-  deleteRule: (id) => {
-    set((state) => ({
-      rules: state.rules.filter((r) => r.id !== id),
-    }));
-  },
+      deleteRule: (id) => {
+        set((state) => ({
+          rules: state.rules.filter((r) => r.id !== id),
+        }));
+      },
 
-  toggleRule: (id) => {
-    set((state) => ({
-      rules: state.rules.map((r) =>
-        r.id === id ? { ...r, isActive: !r.isActive } : r
-      ),
-    }));
-  },
+      toggleRule: (id) => {
+        set((state) => ({
+          rules: state.rules.map((r) =>
+            r.id === id ? { ...r, isActive: !r.isActive } : r
+          ),
+        }));
+      },
 
-  getRuleById: (id) => {
-    return get().rules.find((r) => r.id === id);
-  },
+      getRuleById: (id) => {
+        return get().rules.find((r) => r.id === id);
+      },
 
-  getActiveRules: () => {
-    return get().rules.filter((r) => r.isActive);
-  },
-}));
+      getActiveRules: () => {
+        return get().rules.filter((r) => r.isActive);
+      },
+
+      getRulesByInstrumentType: (type) => {
+        return get().rules.filter((r) => r.instrumentType === type && r.isActive);
+      },
+    }),
+    {
+      name: 'billing-rules-storage',
+    }
+  )
+);

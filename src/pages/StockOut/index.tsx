@@ -10,16 +10,23 @@ import {
   X,
   TrendingUp,
   PieChart,
+  Undo2,
+  FileText,
 } from 'lucide-react';
 import { useStockOutStore } from '@/store/useStockOutStore';
 import { useBatchStore } from '@/store/useBatchStore';
+import { useBillStore } from '@/store/useBillStore';
 import { getTodayString } from '@/utils/date';
+import { formatCurrency } from '@/utils/pricing';
 import type { StockOut } from '@/types';
 
 export default function StockOut() {
-  const { stockOuts, addStockOut, getDestinationDistribution } =
+  const { stockOuts, addStockOut, getDestinationDistribution, revokeStockOut } =
     useStockOutStore();
-  const { batches, getBatchById } = useBatchStore();
+  const { getBatchesWithStatus, getBatchById } = useBatchStore();
+  const { getBillById } = useBillStore();
+
+  const batches = getBatchesWithStatus();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -148,6 +155,7 @@ export default function StockOut() {
           <div className="space-y-3">
             {filteredStockOuts.map((out) => {
               const batch = getBatchById(out.batchId);
+              const bill = out.billId ? getBillById(out.billId) : null;
               return (
                 <div
                   key={out.id}
@@ -202,6 +210,26 @@ export default function StockOut() {
                     </div>
                   </div>
 
+                  {bill && (
+                    <div className="mt-3 pt-3 border-t border-sandalwood-100 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-gold-500" />
+                        <span className="text-sm text-sandalwood-600">
+                          关联账单：
+                        </span>
+                        <span className="text-sm font-medium text-sandalwood-900">
+                          {bill.billNo}
+                        </span>
+                        <span className="text-sm text-sandalwood-500">
+                          · {bill.customerName}
+                        </span>
+                        <span className="text-sm font-semibold text-gold-600">
+                          {formatCurrency(bill.finalAmount)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
                   {out.needMaintenance && (
                     <div className="mt-3 pt-3 border-t border-sandalwood-100 flex items-center gap-2">
                       <Wrench className="w-4 h-4 text-gold-500" />
@@ -216,6 +244,20 @@ export default function StockOut() {
                       备注：{out.remark}
                     </p>
                   )}
+
+                  <div className="mt-4 pt-3 border-t border-sandalwood-100 flex justify-end">
+                    <button
+                      onClick={() => {
+                        if (confirm('确定要撤回此出库记录吗？撤回后库存将自动恢复。')) {
+                          revokeStockOut(out.id);
+                        }
+                      }}
+                      className="btn btn-secondary btn-sm gap-2 text-red-600 hover:bg-red-50"
+                    >
+                      <Undo2 className="w-4 h-4" />
+                      撤回出库
+                    </button>
+                  </div>
                 </div>
               );
             })}

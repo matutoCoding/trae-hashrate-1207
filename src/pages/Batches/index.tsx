@@ -10,6 +10,7 @@ import {
   X,
   Eye,
   ArrowRight,
+  MapPin,
 } from 'lucide-react';
 import { useBatchStore } from '@/store/useBatchStore';
 import { useStockOutStore } from '@/store/useStockOutStore';
@@ -19,8 +20,8 @@ import { getDaysUntilExpiry, formatDate } from '@/utils/date';
 import type { Batch } from '@/types';
 
 export default function Batches() {
-  const { batches, addBatch, getBatchById } = useBatchStore();
-  const { getStockOutsByBatch } = useStockOutStore();
+  const { getBatchesWithStatus, addBatch, getBatchWithStatusById } = useBatchStore();
+  const { getStockOutsByBatch, getDestinationDistributionByBatch, getTotalOutQuantityByBatch } = useStockOutStore();
   const { getMaintenancesByBatch } = useMaintenanceStore();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -28,6 +29,8 @@ export default function Batches() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedBatch, setSelectedBatch] = useState<Batch | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+
+  const batches = getBatchesWithStatus();
 
   const [formData, setFormData] = useState({
     batchNo: '',
@@ -87,7 +90,10 @@ export default function Batches() {
   };
 
   const viewBatchDetail = (batch: Batch) => {
-    setSelectedBatch(batch);
+    const batchWithStatus = getBatchWithStatusById(batch.id);
+    if (batchWithStatus) {
+      setSelectedBatch(batchWithStatus);
+    }
   };
 
   return (
@@ -350,6 +356,50 @@ export default function Batches() {
 
               <div className="mb-6">
                 <h4 className="font-medium text-sandalwood-900 mb-3 flex items-center gap-2">
+                  <MapPin className="w-4 h-4" />
+                  去向分布
+                </h4>
+                <div className="space-y-2">
+                  {getDestinationDistributionByBatch(selectedBatch.id).length > 0 ? (
+                    getDestinationDistributionByBatch(selectedBatch.id).map((item, index) => {
+                      const totalOut = getTotalOutQuantityByBatch(selectedBatch.id);
+                      const percent = (item.quantity / totalOut) * 100;
+                      const colors = [
+                        'bg-teal-500',
+                        'bg-gold-500',
+                        'bg-sandalwood-500',
+                        'bg-red-500',
+                        'bg-blue-500',
+                      ];
+                      return (
+                        <div key={index}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-sm text-sandalwood-700">
+                              {item.destination}
+                            </span>
+                            <span className="text-sm font-medium text-sandalwood-900">
+                              {item.quantity} 件
+                            </span>
+                          </div>
+                          <div className="h-2 bg-sandalwood-100 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${colors[index % colors.length]}`}
+                              style={{ width: `${percent}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <p className="text-sm text-sandalwood-400 text-center py-4">
+                      暂无去向数据
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="mb-6">
+                <h4 className="font-medium text-sandalwood-900 mb-3 flex items-center gap-2">
                   <Eye className="w-4 h-4" />
                   出库记录
                   <span className="text-sm text-sandalwood-400 font-normal">
@@ -369,6 +419,7 @@ export default function Batches() {
                           </p>
                           <p className="text-xs text-sandalwood-500">
                             {out.outDate} · {out.receiver}
+                            {out.billId && ' · 关联账单'}
                           </p>
                         </div>
                         <span className="text-sm font-semibold text-sandalwood-700">

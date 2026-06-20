@@ -16,10 +16,12 @@ import { formatCurrency } from '@/utils/pricing';
 import { Link } from 'react-router-dom';
 
 export default function Dashboard() {
-  const { batches, getWarningBatches, getExpiredBatches } = useBatchStore();
+  const { getBatchesWithStatus, getWarningBatches, getExpiredBatches } = useBatchStore();
   const { bills, getTotalRevenue, getUnpaidBills } = useBillStore();
   const { stockOuts } = useStockOutStore();
   const { getPendingMaintenances } = useMaintenanceStore();
+
+  const batches = getBatchesWithStatus();
 
   const totalInstruments = batches.reduce(
     (sum, b) => sum + b.totalQuantity,

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { Maintenance } from '@/types';
 import { mockMaintenances } from '@/utils/mock';
 
@@ -15,64 +16,77 @@ interface MaintenanceState {
   getMaintenancesByDate: (date: string) => Maintenance[];
 }
 
-export const useMaintenanceStore = create<MaintenanceState>((set, get) => ({
-  maintenances: mockMaintenances,
+export const useMaintenanceStore = create<MaintenanceState>()(
+  persist(
+    (set, get) => ({
+      maintenances: mockMaintenances,
 
-  addMaintenance: (maintenance) => {
-    const newMaintenance: Maintenance = {
-      ...maintenance,
-      id: `mt-${Date.now()}`,
-      status: 'pending',
-      completedDate: null,
-    };
-    set((state) => ({ maintenances: [...state.maintenances, newMaintenance] }));
-  },
+      addMaintenance: (maintenance) => {
+        const newMaintenance: Maintenance = {
+          ...maintenance,
+          id: `mt-${Date.now()}`,
+          status: 'pending',
+          completedDate: null,
+        };
+        set((state) => ({
+          maintenances: [...state.maintenances, newMaintenance],
+        }));
+      },
 
-  updateMaintenance: (id, updates) => {
-    set((state) => ({
-      maintenances: state.maintenances.map((m) =>
-        m.id === id ? { ...m, ...updates } : m
-      ),
-    }));
-  },
+      updateMaintenance: (id, updates) => {
+        set((state) => ({
+          maintenances: state.maintenances.map((m) =>
+            m.id === id ? { ...m, ...updates } : m
+          ),
+        }));
+      },
 
-  completeMaintenance: (id) => {
-    set((state) => ({
-      maintenances: state.maintenances.map((m) =>
-        m.id === id
-          ? { ...m, status: 'completed', completedDate: new Date().toISOString().split('T')[0] }
-          : m
-      ),
-    }));
-  },
+      completeMaintenance: (id) => {
+        set((state) => ({
+          maintenances: state.maintenances.map((m) =>
+            m.id === id
+              ? {
+                  ...m,
+                  status: 'completed',
+                  completedDate: new Date().toISOString().split('T')[0],
+                }
+              : m
+          ),
+        }));
+      },
 
-  cancelMaintenance: (id) => {
-    set((state) => ({
-      maintenances: state.maintenances.map((m) =>
-        m.id === id ? { ...m, status: 'cancelled' } : m
-      ),
-    }));
-  },
+      cancelMaintenance: (id) => {
+        set((state) => ({
+          maintenances: state.maintenances.map((m) =>
+            m.id === id ? { ...m, status: 'cancelled' } : m
+          ),
+        }));
+      },
 
-  deleteMaintenance: (id) => {
-    set((state) => ({
-      maintenances: state.maintenances.filter((m) => m.id !== id),
-    }));
-  },
+      deleteMaintenance: (id) => {
+        set((state) => ({
+          maintenances: state.maintenances.filter((m) => m.id !== id),
+        }));
+      },
 
-  getMaintenanceById: (id) => {
-    return get().maintenances.find((m) => m.id === id);
-  },
+      getMaintenanceById: (id) => {
+        return get().maintenances.find((m) => m.id === id);
+      },
 
-  getMaintenancesByBatch: (batchId) => {
-    return get().maintenances.filter((m) => m.batchId === batchId);
-  },
+      getMaintenancesByBatch: (batchId) => {
+        return get().maintenances.filter((m) => m.batchId === batchId);
+      },
 
-  getPendingMaintenances: () => {
-    return get().maintenances.filter((m) => m.status === 'pending');
-  },
+      getPendingMaintenances: () => {
+        return get().maintenances.filter((m) => m.status === 'pending');
+      },
 
-  getMaintenancesByDate: (date) => {
-    return get().maintenances.filter((m) => m.scheduledDate === date);
-  },
-}));
+      getMaintenancesByDate: (date) => {
+        return get().maintenances.filter((m) => m.scheduledDate === date);
+      },
+    }),
+    {
+      name: 'maintenances-storage',
+    }
+  )
+);

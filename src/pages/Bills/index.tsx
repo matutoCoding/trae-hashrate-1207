@@ -1,7 +1,6 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   Plus,
-  Eye,
   Search,
   Filter,
   ChevronDown,
@@ -9,25 +8,44 @@ import {
   FileText,
   Calendar,
   User,
-  Music,
   Tag,
+  PackageOpen,
+  AlertCircle,
+  CheckCircle,
+  Undo2,
+  ArrowRight,
 } from 'lucide-react';
 import { useBillStore } from '@/store/useBillStore';
 import { useBatchStore } from '@/store/useBatchStore';
 import { useBillingRuleStore } from '@/store/useBillingRuleStore';
-import { formatCurrency, getPricingTypeLabel } from '@/utils/pricing';
+import { useStockOutStore } from '@/store/useStockOutStore';
+import {
+  formatCurrency,
+  getPricingTypeLabel,
+  calculateRentalPrice,
+} from '@/utils/pricing';
 import { calculateDays, getTodayString } from '@/utils/date';
 import type { Bill } from '@/types';
 
 export default function Bills() {
-  const { bills, addBill, updateBillStatus, getBillById } = useBillStore();
-  const { batches } = useBatchStore();
-  const { getActiveRules } = useBillingRuleStore();
+  const { bills, addBill, updateBillStatus, getBillById, deleteBill } =
+    useBillStore();
+  const { getBatchesWithStatus, getBatchById } = useBatchStore();
+  const { getActiveRules, getRulesByInstrumentType } = useBillingRuleStore();
+  const {
+    addStockOut,
+    getStockOutsByBill,
+    getTotalOutQuantityByBill,
+    revokeStockOut,
+  } = useStockOutStore();
+
+  const batches = getBatchesWithStatus();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isStockOutModalOpen, setIsStockOutModalOpen] = useState(false);
 
   const [formData, setFormData] = useState({
     batchId: '',
@@ -37,6 +55,87 @@ export default function Bills() {
     startDate: getTodayString(),
     endDate: getTodayString(),
   });
+
+  const [stockOutForm, setStockOutForm] = useState({
+    quantity: 1,
+    destination: '',
+    receiver: '',
+    needMaintenance: false,
+    outDate: getTodayString(),
+    remark: '',
+  });
+
+  const selectedBatch = useMemo(() => {
+    if (!formData.batchId) return null;
+    return getBatchById(formData.batchId);
+  }, [formData.batchId, getBatchById]);
+
+  const availableRules = useMemo(() => {
+    if (!selectedBatch) {
+      return getActiveRules();
+    }
+    const typeRules = getRulesByInstrumentType(selectedBatch.instrumentType);
+    return typeRules.length > 0 ? typeRules : getActiveRules();
+  }, [selectedBatch, getRulesByInstrumentType, getActiveRules]);
+
+  const selectedRule = useMemo(() => {
+    if (!formData.ruleId) return null;
+    return availableRules.find((r) => r.id === formData.ruleId);
+  }, [formData.ruleId, availableRules]);
+
+  const dateError = useMemo(() => {
+    if (!formData.startDate || !formData.endDate) return '';
+    const start = new Date(formData.startDate);
+    const end = new Date(formData.endDate);
+    if (end < start) {
+      return '结束日期不能早于开始日期';
+    }
+    return '';
+  }, [formData.startDate, formData.endDate]);
+
+  const rentalDays = useMemo(() => {
+    if (!formData.startDate || !formData.endDate || dateError) return 0;
+    return calculateDays(formData.startDate, formData.endDate);
+  }, [formData.startDate, formData.endDate, dateError]);
+
+  const pricePreview = useMemo(() => {
+    if (!selectedRule || rentalDays <= 0 || formData.quantity <= 0) {
+      return null;
+    }
+    const result = calculateRentalPrice(
+      selectedRule.dailyRate,
+      rentalDays,
+      selectedRule.startingPrice,
+      selectedRule.capPrice
+    );
+    return {
+      ...result,
+      baseAmount: result.baseAmount * formData.quantity,
+      finalAmount: result.finalAmount * formData.quantity,
+    };
+  }, [selectedRule, rentalDays, formData.quantity]);
+
+  const maxQuantity = selectedBatch?.remainingQuantity || 0;
+
+  const quantityError = useMemo(() => {
+    if (formData.quantity > maxQuantity) {
+      return `租赁数量不能超过库存数量 (${maxQuantity}件)`;
+    }
+    if (formData.quantity <= 0) {
+      return '租赁数量必须大于0';
+    }
+    return '';
+  }, [formData.quantity, maxQuantity]);
+
+  const isFormValid =
+    formData.customerName &&
+    formData.batchId &&
+    formData.ruleId &&
+    formData.quantity > 0 &&
+    formData.startDate &&
+    formData.endDate &&
+    !dateError &&
+    !quantityError;
 
   const filteredBills = bills.filter((bill) => {
     const matchesSearch =
@@ -76,29 +175,37 @@ export default function Bills() {
     );
   };
 
-  const handleCreateSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const rule = getActiveRules().find((r) => r.id === formData.ruleId);
-    if (!rule) return;
+  const handleBatchChange = (batchId: string) => {
+    const batch = getBatchById(batchId);
+    const newFormData = { ...formData, batchId };
 
-    const rentalDays = calculateDays(formData.startDate, formData.endDate);
-    const basePerUnit = rule.dailyRate * rentalDays;
-    let finalPerUnit = basePerUnit;
-    let pricingType: Bill['pricingType'] = 'normal';
+    if (batch) {
+      const typeRules = getRulesByInstrumentType(batch.instrumentType);
+      if (typeRules.length > 0) {
+        newFormData.ruleId = typeRules[0].id;
+      } else if (availableRules.length > 0) {
+        newFormData.ruleId = availableRules[0].id;
+      } else {
+        newFormData.ruleId = '';
+      }
 
-    if (basePerUnit < rule.startingPrice) {
-      finalPerUnit = rule.startingPrice;
-      pricingType = 'starting';
-    } else if (basePerUnit > rule.capPrice) {
-      finalPerUnit = rule.capPrice;
-      pricingType = 'cap';
+      if (formData.quantity > batch.remainingQuantity) {
+        newFormData.quantity = batch.remainingQuantity;
+      }
     }
 
-    addBill({
+    setFormData(newFormData);
+  };
+
+  const handleCreateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isFormValid || !selectedRule) return;
+
+    const newBill = addBill({
       ...formData,
-      dailyRate: rule.dailyRate,
-      startingPrice: rule.startingPrice,
-      capPrice: rule.capPrice,
+      dailyRate: selectedRule.dailyRate,
+      startingPrice: selectedRule.startingPrice,
+      capPrice: selectedRule.capPrice,
     });
 
     setIsCreateModalOpen(false);
@@ -110,13 +217,106 @@ export default function Bills() {
       startDate: getTodayString(),
       endDate: getTodayString(),
     });
+
+    setTimeout(() => {
+      const bill = getBillById(newBill.id);
+      if (bill) {
+        setSelectedBill(bill);
+      }
+    }, 0);
   };
 
   const viewBillDetail = (bill: Bill) => {
     setSelectedBill(bill);
   };
 
-  const activeRules = getActiveRules();
+  const openStockOutModal = () => {
+    if (!selectedBill) return;
+    const batch = getBatchById(selectedBill.batchId);
+    const alreadyOut = getTotalOutQuantityByBill(selectedBill.id);
+    const remaining = selectedBill.quantity - alreadyOut;
+    const available = batch ? Math.min(batch.remainingQuantity, remaining) : 0;
+
+    setStockOutForm({
+      quantity: Math.max(1, available),
+      destination: selectedBill.customerName,
+      receiver: selectedBill.customerName,
+      needMaintenance: false,
+      outDate: getTodayString(),
+      remark: '',
+    });
+    setIsStockOutModalOpen(true);
+  };
+
+  const handleStockOutSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedBill) return;
+
+    const alreadyOut = getTotalOutQuantityByBill(selectedBill.id);
+    const remaining = selectedBill.quantity - alreadyOut;
+
+    if (stockOutForm.quantity > remaining) {
+      alert(`出库数量不能超过账单剩余未出库数量 (${remaining}件)`);
+      return;
+    }
+
+    const batch = getBatchById(selectedBill.batchId);
+    if (batch && stockOutForm.quantity > batch.remainingQuantity) {
+      alert(`出库数量不能超过批次剩余库存 (${batch.remainingQuantity}件)`);
+      return;
+    }
+
+    addStockOut({
+      ...stockOutForm,
+      batchId: selectedBill.batchId,
+      billId: selectedBill.id,
+    });
+
+    setIsStockOutModalOpen(false);
+
+    const updatedBill = getBillById(selectedBill.id);
+    if (updatedBill) {
+      setSelectedBill(updatedBill);
+    }
+  };
+
+  const handleCancelBill = () => {
+    if (!selectedBill) return;
+
+    const billStockOuts = getStockOutsByBill(selectedBill.id);
+    if (billStockOuts.length > 0) {
+      if (
+        !confirm(
+          `该账单已有 ${billStockOuts.length} 笔出库记录，取消账单将同时撤回所有出库并恢复库存。确定要取消吗？`
+        )
+      ) {
+        return;
+      }
+      billStockOuts.forEach((out) => {
+        revokeStockOut(out.id);
+      });
+    }
+
+    updateBillStatus(selectedBill.id, 'cancelled');
+    const updated = getBillById(selectedBill.id);
+    if (updated) setSelectedBill(updated);
+  };
+
+  const handleRevokeStockOut = (stockOutId: string) => {
+    if (!confirm('确定要撤回这笔出库吗？撤回后库存将恢复。')) return;
+    revokeStockOut(stockOutId);
+    if (selectedBill) {
+      const updated = getBillById(selectedBill.id);
+      if (updated) setSelectedBill(updated);
+    }
+  };
+
+  const billStockOuts = selectedBill
+    ? getStockOutsByBill(selectedBill.id)
+    : [];
+  const billOutQuantity = selectedBill
+    ? getTotalOutQuantityByBill(selectedBill.id)
+    : 0;
 
   return (
     <div className="p-4 md:p-6 lg:p-8 max-w-7xl mx-auto">
@@ -126,7 +326,7 @@ export default function Bills() {
             账单管理
           </h1>
           <p className="text-sandalwood-500 text-sm">
-            查看和管理所有租赁账单
+            查看和管理所有租赁账单，支持从账单发起出库
           </p>
         </div>
         <button
@@ -169,7 +369,8 @@ export default function Bills() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {filteredBills.map((bill) => {
-          const batch = batches.find((b) => b.id === bill.batchId);
+          const batch = getBatchById(bill.batchId);
+          const outQty = getTotalOutQuantityByBill(bill.id);
           return (
             <div
               key={bill.id}
@@ -191,7 +392,9 @@ export default function Bills() {
               <div className="space-y-2 mb-4">
                 <div className="flex items-center gap-2 text-sm">
                   <User className="w-4 h-4 text-sandalwood-400" />
-                  <span className="text-sandalwood-600">{bill.customerName}</span>
+                  <span className="text-sandalwood-600">
+                    {bill.customerName}
+                  </span>
                 </div>
                 <div className="flex items-center gap-2 text-sm">
                   <Calendar className="w-4 h-4 text-sandalwood-400" />
@@ -203,6 +406,12 @@ export default function Bills() {
                   <Tag className="w-4 h-4 text-sandalwood-400" />
                   <span className="text-sandalwood-600">
                     {bill.quantity} 件 · {bill.rentalDays} 天
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                  <PackageOpen className="w-4 h-4 text-sandalwood-400" />
+                  <span className="text-sandalwood-600">
+                    已出库 {outQty}/{bill.quantity} 件
                   </span>
                 </div>
               </div>
@@ -230,7 +439,7 @@ export default function Bills() {
 
       {selectedBill && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-slide-up">
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-slide-up">
             <div className="p-6 border-b border-sandalwood-100 flex items-center justify-between">
               <h2 className="text-xl font-serif font-bold text-sandalwood-900">
                 账单详情
@@ -243,8 +452,8 @@ export default function Bills() {
               </button>
             </div>
 
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-6">
+            <div className="p-6 space-y-6">
+              <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-sandalwood-500">账单号</p>
                   <p className="text-lg font-semibold text-sandalwood-900">
@@ -254,76 +463,163 @@ export default function Bills() {
                 {getStatusBadge(selectedBill.status)}
               </div>
 
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-sandalwood-50 rounded-lg p-3">
-                    <p className="text-xs text-sandalwood-500 mb-1">客户名称</p>
-                    <p className="font-medium text-sandalwood-900">
-                      {selectedBill.customerName}
-                    </p>
-                  </div>
-                  <div className="bg-sandalwood-50 rounded-lg p-3">
-                    <p className="text-xs text-sandalwood-500 mb-1">租赁数量</p>
-                    <p className="font-medium text-sandalwood-900">
-                      {selectedBill.quantity} 件
-                    </p>
-                  </div>
-                </div>
-
+              <div className="grid grid-cols-2 gap-4">
                 <div className="bg-sandalwood-50 rounded-lg p-4">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Calendar className="w-4 h-4 text-sandalwood-400" />
-                    <span className="text-sm text-sandalwood-600">租赁周期</span>
-                  </div>
+                  <p className="text-xs text-sandalwood-500 mb-1">客户名称</p>
                   <p className="font-medium text-sandalwood-900">
-                    {selectedBill.startDate} 至 {selectedBill.endDate}
-                  </p>
-                  <p className="text-sm text-sandalwood-500 mt-1">
-                    共 {selectedBill.rentalDays} 天
+                    {selectedBill.customerName}
                   </p>
                 </div>
+                <div className="bg-sandalwood-50 rounded-lg p-4">
+                  <p className="text-xs text-sandalwood-500 mb-1">乐器批次</p>
+                  <p className="font-medium text-sandalwood-900">
+                    {getBatchById(selectedBill.batchId)?.instrumentName ||
+                      '未知'}
+                  </p>
+                  <p className="text-xs text-sandalwood-500">
+                    {getBatchById(selectedBill.batchId)?.batchNo}
+                  </p>
+                </div>
+              </div>
 
-                <div className="bg-gold-50 rounded-xl p-4 border border-gold-100">
-                  <h3 className="font-medium text-gold-800 mb-3">费用明细</h3>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-gold-600">日租金 × 数量 × 天数</span>
-                      <span className="text-gold-800">
-                        {formatCurrency(selectedBill.baseAmount)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gold-600">计费方式</span>
-                      {getPricingBadge(selectedBill.pricingType)}
-                    </div>
-                    {selectedBill.pricingType === 'starting' && (
-                      <p className="text-xs text-gold-500 italic">
-                        * 基础租金低于起步价，按起步价收取
-                      </p>
-                    )}
-                    {selectedBill.pricingType === 'cap' && (
-                      <p className="text-xs text-gold-500 italic">
-                        * 基础租金超过封顶价，按封顶价收取
-                      </p>
-                    )}
-                    <div className="border-t border-gold-200 pt-2 mt-2 flex justify-between">
-                      <span className="font-medium text-gold-800">应收金额</span>
-                      <span className="text-xl font-bold text-gold-700">
-                        {formatCurrency(selectedBill.finalAmount)}
-                      </span>
-                    </div>
+              <div className="bg-sandalwood-50 rounded-lg p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Calendar className="w-4 h-4 text-sandalwood-400" />
+                  <span className="text-sm text-sandalwood-600">租赁周期</span>
+                </div>
+                <p className="font-medium text-sandalwood-900">
+                  {selectedBill.startDate} 至 {selectedBill.endDate}
+                </p>
+                <p className="text-sm text-sandalwood-500 mt-1">
+                  共 {selectedBill.rentalDays} 天
+                </p>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div className="bg-sandalwood-50 rounded-lg p-4 text-center">
+                  <p className="text-xs text-sandalwood-500 mb-1">租赁数量</p>
+                  <p className="text-lg font-bold text-sandalwood-900">
+                    {selectedBill.quantity}
+                    <span className="text-sm font-normal text-sandalwood-500 ml-1">
+                      件
+                    </span>
+                  </p>
+                </div>
+                <div className="bg-teal-50 rounded-lg p-4 text-center">
+                  <p className="text-xs text-teal-600 mb-1">已出库</p>
+                  <p className="text-lg font-bold text-teal-700">
+                    {billOutQuantity}
+                    <span className="text-sm font-normal text-teal-500 ml-1">
+                      件
+                    </span>
+                  </p>
+                </div>
+                <div className="bg-gold-50 rounded-lg p-4 text-center">
+                  <p className="text-xs text-gold-600 mb-1">待出库</p>
+                  <p className="text-lg font-bold text-gold-700">
+                    {selectedBill.quantity - billOutQuantity}
+                    <span className="text-sm font-normal text-gold-500 ml-1">
+                      件
+                    </span>
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-gold-50 rounded-xl p-4 border border-gold-100">
+                <h3 className="font-medium text-gold-800 mb-3">费用明细</h3>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gold-600">基础租金</span>
+                    <span className="text-gold-800">
+                      {formatCurrency(selectedBill.baseAmount)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gold-600">计费方式</span>
+                    {getPricingBadge(selectedBill.pricingType)}
+                  </div>
+                  {selectedBill.pricingType === 'starting' && (
+                    <p className="text-xs text-gold-500 italic">
+                      * 基础租金低于起步价，按起步价收取
+                    </p>
+                  )}
+                  {selectedBill.pricingType === 'cap' && (
+                    <p className="text-xs text-gold-500 italic">
+                      * 基础租金超过封顶价，按封顶价收取
+                    </p>
+                  )}
+                  <div className="border-t border-gold-200 pt-2 mt-2 flex justify-between">
+                    <span className="font-medium text-gold-800">应收金额</span>
+                    <span className="text-xl font-bold text-gold-700">
+                      {formatCurrency(selectedBill.finalAmount)}
+                    </span>
                   </div>
                 </div>
               </div>
 
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-medium text-sandalwood-900 flex items-center gap-2">
+                    <PackageOpen className="w-4 h-4" />
+                    出库记录
+                    <span className="text-sm text-sandalwood-400 font-normal">
+                      (共 {billStockOuts.length} 笔)
+                    </span>
+                  </h3>
+                  {selectedBill.status !== 'cancelled' &&
+                    billOutQuantity < selectedBill.quantity && (
+                      <button
+                        onClick={openStockOutModal}
+                        className="btn btn-teal text-sm gap-1 py-1.5"
+                      >
+                        <Plus className="w-4 h-4" />
+                        发起出库
+                      </button>
+                    )}
+                </div>
+                {billStockOuts.length > 0 ? (
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {billStockOuts.map((out) => (
+                      <div
+                        key={out.id}
+                        className="flex items-center justify-between p-3 bg-sandalwood-50 rounded-lg"
+                      >
+                        <div className="flex-1">
+                          <p className="text-sm font-medium text-sandalwood-900">
+                            {out.destination}
+                          </p>
+                          <p className="text-xs text-sandalwood-500">
+                            {out.outDate} · {out.receiver}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="text-sm font-semibold text-sandalwood-700">
+                            {out.quantity} 件
+                          </span>
+                          {selectedBill.status !== 'cancelled' && (
+                            <button
+                              onClick={() => handleRevokeStockOut(out.id)}
+                              className="text-red-500 hover:text-red-600 p-1"
+                              title="撤回出库"
+                            >
+                              <Undo2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-sandalwood-400 text-center py-4">
+                    暂无出库记录
+                  </p>
+                )}
+              </div>
+
               {selectedBill.status === 'unpaid' && (
-                <div className="flex gap-3 mt-6">
+                <div className="flex gap-3 pt-4 border-t border-sandalwood-100">
                   <button
-                    onClick={() => {
-                      updateBillStatus(selectedBill.id, 'cancelled');
-                      const updated = getBillById(selectedBill.id);
-                      if (updated) setSelectedBill(updated);
-                    }}
+                    onClick={handleCancelBill}
                     className="btn btn-secondary flex-1"
                   >
                     取消账单
@@ -337,6 +633,17 @@ export default function Bills() {
                     className="btn btn-teal flex-1"
                   >
                     确认收款
+                  </button>
+                </div>
+              )}
+
+              {selectedBill.status === 'paid' && (
+                <div className="flex gap-3 pt-4 border-t border-sandalwood-100">
+                  <button
+                    onClick={handleCancelBill}
+                    className="btn btn-secondary flex-1"
+                  >
+                    取消账单（需退款）
                   </button>
                 </div>
               )}
@@ -380,19 +687,24 @@ export default function Bills() {
                 <select
                   className="input"
                   value={formData.batchId}
-                  onChange={(e) =>
-                    setFormData({ ...formData, batchId: e.target.value })
-                  }
+                  onChange={(e) => handleBatchChange(e.target.value)}
                   required
                 >
                   <option value="">请选择乐器批次</option>
-                  {batches.map((batch) => (
-                    <option key={batch.id} value={batch.id}>
-                      {batch.instrumentName} ({batch.batchNo}) - 剩余
-                      {batch.remainingQuantity}件
-                    </option>
-                  ))}
+                  {batches
+                    .filter((b) => b.status !== 'expired')
+                    .map((batch) => (
+                      <option key={batch.id} value={batch.id}>
+                        {batch.instrumentName} ({batch.batchNo}) - 剩余
+                        {batch.remainingQuantity}件
+                      </option>
+                    ))}
                 </select>
+                {selectedBatch && (
+                  <p className="text-xs text-sandalwood-500 mt-1">
+                    乐器类型：{selectedBatch.instrumentType}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -406,9 +718,11 @@ export default function Bills() {
                   required
                 >
                   <option value="">请选择计费规则</option>
-                  {activeRules.map((rule) => (
+                  {availableRules.map((rule) => (
                     <option key={rule.id} value={rule.id}>
                       {rule.name} - {formatCurrency(rule.dailyRate)}/天
+                      (起步{formatCurrency(rule.startingPrice)} / 封顶
+                      {formatCurrency(rule.capPrice)})
                     </option>
                   ))}
                 </select>
@@ -420,15 +734,33 @@ export default function Bills() {
                   type="number"
                   className="input"
                   min="1"
+                  max={maxQuantity}
                   value={formData.quantity}
                   onChange={(e) =>
                     setFormData({
                       ...formData,
-                      quantity: Number(e.target.value),
+                      quantity: Math.max(
+                        1,
+                        Math.min(
+                          maxQuantity,
+                          Number(e.target.value)
+                        )
+                      ),
                     })
                   }
                   required
                 />
+                {quantityError && (
+                  <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" />
+                    {quantityError}
+                  </p>
+                )}
+                {selectedBatch && !quantityError && (
+                  <p className="text-xs text-sandalwood-500 mt-1">
+                    可用库存：{selectedBatch.remainingQuantity} 件
+                  </p>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -448,7 +780,7 @@ export default function Bills() {
                   <label className="label">结束日期</label>
                   <input
                     type="date"
-                    className="input"
+                    className={`input ${dateError ? 'border-red-400 focus:ring-red-400' : ''}`}
                     value={formData.endDate}
                     onChange={(e) =>
                       setFormData({ ...formData, endDate: e.target.value })
@@ -458,6 +790,63 @@ export default function Bills() {
                 </div>
               </div>
 
+              {dateError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+                  <span className="text-sm text-red-600">{dateError}</span>
+                </div>
+              )}
+
+              {rentalDays > 0 && !dateError && (
+                <div className="p-3 bg-sandalwood-50 rounded-lg">
+                  <p className="text-sm text-sandalwood-600">
+                    租赁天数：
+                    <span className="font-semibold text-sandalwood-900">
+                      {rentalDays} 天
+                    </span>
+                  </p>
+                </div>
+              )}
+
+              {pricePreview && (
+                <div className="bg-gold-50 rounded-xl p-4 border border-gold-100">
+                  <h4 className="font-medium text-gold-800 mb-3 flex items-center gap-2">
+                    <CheckCircle className="w-4 h-4 text-teal-500" />
+                    费用试算
+                  </h4>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-gold-600">基础租金</span>
+                      <span className="text-gold-800">
+                        {formatCurrency(pricePreview.baseAmount)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gold-600">计费方式</span>
+                      {getPricingBadge(pricePreview.pricingType)}
+                    </div>
+                    {pricePreview.pricingType === 'starting' && (
+                      <p className="text-xs text-gold-500 italic">
+                        * 租期较短，按起步价收取
+                      </p>
+                    )}
+                    {pricePreview.pricingType === 'cap' && (
+                      <p className="text-xs text-gold-500 italic">
+                        * 租期较长，按封顶价收取
+                      </p>
+                    )}
+                    <div className="border-t border-gold-200 pt-2 mt-2 flex justify-between">
+                      <span className="font-medium text-gold-800">
+                        预估金额
+                      </span>
+                      <span className="text-xl font-bold text-gold-700">
+                        {formatCurrency(pricePreview.finalAmount)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="flex gap-3 pt-4">
                 <button
                   type="button"
@@ -466,8 +855,171 @@ export default function Bills() {
                 >
                   取消
                 </button>
-                <button type="submit" className="btn btn-primary flex-1">
+                <button
+                  type="submit"
+                  className="btn btn-primary flex-1"
+                  disabled={!isFormValid}
+                >
                   创建账单
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {isStockOutModalOpen && selectedBill && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-slide-up">
+            <div className="p-6 border-b border-sandalwood-100 flex items-center justify-between">
+              <h2 className="text-xl font-serif font-bold text-sandalwood-900">
+                发起出库
+              </h2>
+              <button
+                onClick={() => setIsStockOutModalOpen(false)}
+                className="text-sandalwood-400 hover:text-sandalwood-600"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <form onSubmit={handleStockOutSubmit} className="p-6 space-y-4">
+              <div className="bg-sandalwood-50 rounded-lg p-4">
+                <p className="text-sm text-sandalwood-500 mb-1">关联账单</p>
+                <p className="font-medium text-sandalwood-900">
+                  {selectedBill.billNo} - {selectedBill.customerName}
+                </p>
+                <p className="text-xs text-sandalwood-500 mt-1">
+                  已出库 {billOutQuantity}/{selectedBill.quantity} 件，剩余
+                  {selectedBill.quantity - billOutQuantity} 件待出库
+                </p>
+              </div>
+
+              <div>
+                <label className="label">出库数量</label>
+                <input
+                  type="number"
+                  className="input"
+                  min="1"
+                  max={selectedBill.quantity - billOutQuantity}
+                  value={stockOutForm.quantity}
+                  onChange={(e) =>
+                    setStockOutForm({
+                      ...stockOutForm,
+                      quantity: Math.max(
+                        1,
+                        Math.min(
+                          selectedBill.quantity - billOutQuantity,
+                          Number(e.target.value)
+                        )
+                      ),
+                    })
+                  }
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="label">去向</label>
+                <input
+                  type="text"
+                  className="input"
+                  value={stockOutForm.destination}
+                  onChange={(e) =>
+                    setStockOutForm({
+                      ...stockOutForm,
+                      destination: e.target.value,
+                    })
+                  }
+                  placeholder="例如：朝阳区音乐培训中心"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="label">接收人</label>
+                <input
+                  type="text"
+                  className="input"
+                  value={stockOutForm.receiver}
+                  onChange={(e) =>
+                    setStockOutForm({
+                      ...stockOutForm,
+                      receiver: e.target.value,
+                    })
+                  }
+                  placeholder="请输入接收人姓名"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="label">出库日期</label>
+                <input
+                  type="date"
+                  className="input"
+                  value={stockOutForm.outDate}
+                  onChange={(e) =>
+                    setStockOutForm({
+                      ...stockOutForm,
+                      outDate: e.target.value,
+                    })
+                  }
+                  required
+                />
+              </div>
+
+              <div className="flex items-center justify-between p-3 bg-sandalwood-50 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="w-5 h-5 text-gold-600" />
+                  <span className="text-sandalwood-700">需要调律保养</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setStockOutForm({
+                      ...stockOutForm,
+                      needMaintenance: !stockOutForm.needMaintenance,
+                    })
+                  }
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    stockOutForm.needMaintenance
+                      ? 'bg-teal-500'
+                      : 'bg-sandalwood-200'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      stockOutForm.needMaintenance
+                        ? 'translate-x-6'
+                        : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div>
+                <label className="label">备注</label>
+                <textarea
+                  className="input min-h-20"
+                  value={stockOutForm.remark}
+                  onChange={(e) =>
+                    setStockOutForm({ ...stockOutForm, remark: e.target.value })
+                  }
+                  placeholder="可选，填写出库说明"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setIsStockOutModalOpen(false)}
+                  className="btn btn-secondary flex-1"
+                >
+                  取消
+                </button>
+                <button type="submit" className="btn btn-teal flex-1">
+                  确认出库
                 </button>
               </div>
             </form>
