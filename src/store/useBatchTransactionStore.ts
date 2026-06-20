@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { BatchTransaction, BatchTransactionType } from '@/types';
 import { getTodayString } from '@/utils/date';
+import { useBatchStore } from './useBatchStore';
 
 interface BatchTransactionState {
   transactions: BatchTransaction[];
@@ -9,6 +10,12 @@ interface BatchTransactionState {
     transaction: Omit<BatchTransaction, 'id' | 'createdAt' | 'operator'>
   ) => BatchTransaction;
   getTransactionsByBatch: (batchId: string) => BatchTransaction[];
+  getFilteredTransactions: (filters: {
+    startDate?: string;
+    endDate?: string;
+    batchNo?: string;
+    types?: BatchTransactionType[];
+  }) => BatchTransaction[];
   clearTransactions: () => void;
 }
 
@@ -33,6 +40,37 @@ export const useBatchTransactionStore = create<BatchTransactionState>()(
       getTransactionsByBatch: (batchId) => {
         return get()
           .transactions.filter((t) => t.batchId === batchId)
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      },
+
+      getFilteredTransactions: (filters) => {
+        const { startDate, endDate, batchNo, types } = filters;
+        const batches = useBatchStore.getState().batches;
+        const batchIdSet = batchNo
+          ? new Set(
+              batches
+                .filter((b) =>
+                  b.batchNo.toLowerCase().includes(batchNo.toLowerCase()) ||
+                  b.instrumentName.toLowerCase().includes(batchNo.toLowerCase())
+                )
+                .map((b) => b.id)
+            )
+          : null;
+
+        return get()
+          .transactions.filter((t) => {
+            if (types && types.length > 0 && !types.includes(t.type)) return false;
+            if (batchIdSet && !batchIdSet.has(t.batchId)) return false;
+            if (startDate) {
+              const txDate = t.createdAt.split('T')[0];
+              if (txDate < startDate) return false;
+            }
+            if (endDate) {
+              const txDate = t.createdAt.split('T')[0];
+              if (txDate > endDate) return false;
+            }
+            return true;
+          })
           .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       },
 

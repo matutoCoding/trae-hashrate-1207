@@ -17,6 +17,7 @@ import {
   Clock,
   History,
   Circle,
+  DollarSign,
 } from 'lucide-react';
 import { useBillStore } from '@/store/useBillStore';
 import { useBatchStore } from '@/store/useBatchStore';
@@ -670,6 +671,20 @@ export default function Bills() {
                     </span>
                   </h3>
                 </div>
+
+                {selectedBill && (
+                  <FulfillmentSteps
+                    bill={selectedBill}
+                    outQuantity={billOutQuantity}
+                    latestLog={fulfillmentLogs[0]}
+                  />
+                )}
+
+                <div className="mt-5">
+                  <p className="text-xs text-sandalwood-500 mb-2 flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    流转明细
+                  </p>
                 {fulfillmentLogs.length > 0 ? (
                   <div className="relative pl-6">
                     <div className="absolute left-2 top-2 bottom-2 w-0.5 bg-sandalwood-100" />
@@ -720,6 +735,7 @@ export default function Bills() {
                     暂无履约记录
                   </p>
                 )}
+                </div>
               </div>
 
               {selectedBill.status === 'unpaid' && (
@@ -1132,6 +1148,140 @@ export default function Bills() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function FulfillmentSteps({
+  bill,
+  outQuantity,
+  latestLog,
+}: {
+  bill: Bill;
+  outQuantity: number;
+  latestLog?: BillFulfillmentLog;
+}) {
+  type StepKey = 'pending' | 'partial' | 'full' | 'revoked' | 'paid' | 'cancelled';
+  const steps: { key: StepKey; label: string; icon: typeof PackageOpen }[] = [
+    { key: 'pending', label: '待出库', icon: PackageOpen },
+    { key: 'partial', label: '部分出库', icon: ArrowRight },
+    { key: 'full', label: '全部出库', icon: CheckCircle },
+    { key: 'paid', label: '已收款', icon: DollarSign },
+    { key: 'revoked', label: '已撤回', icon: Undo2 },
+    { key: 'cancelled', label: '已取消', icon: X },
+  ];
+
+  let activeStep: StepKey = 'pending';
+  if (bill.status === 'cancelled') {
+    activeStep = 'cancelled';
+  } else if (latestLog?.type === 'revoke_out' && outQuantity === 0) {
+    activeStep = 'revoked';
+  } else if (bill.status === 'paid') {
+    activeStep = 'paid';
+  } else if (outQuantity >= bill.quantity && bill.quantity > 0) {
+    activeStep = 'full';
+  } else if (outQuantity > 0) {
+    activeStep = 'partial';
+  }
+
+  const activeIndex = steps.findIndex((s) => s.key === activeStep);
+
+  const getStepStyle = (idx: number, key: StepKey) => {
+    const isActive = idx === activeIndex;
+    const isDone = idx < activeIndex || key === 'paid' && bill.status === 'paid' || key === 'cancelled' && bill.status === 'cancelled';
+    if (key === 'revoked') {
+      const isRevokeActive = activeStep === 'revoked';
+      return {
+        dot: isRevokeActive
+          ? 'bg-blue-500 text-white'
+          : 'bg-sandalwood-100 text-sandalwood-400',
+        line: 'bg-sandalwood-100',
+        label: isRevokeActive ? 'text-blue-700 font-semibold' : 'text-sandalwood-400',
+      };
+    }
+    if (key === 'cancelled') {
+      const isCancelActive = activeStep === 'cancelled';
+      return {
+        dot: isCancelActive
+          ? 'bg-red-500 text-white'
+          : 'bg-sandalwood-100 text-sandalwood-400',
+        line: 'bg-sandalwood-100',
+        label: isCancelActive ? 'text-red-700 font-semibold' : 'text-sandalwood-400',
+      };
+    }
+    return {
+      dot: isActive
+        ? 'bg-gold-500 text-white'
+        : isDone
+        ? 'bg-teal-500 text-white'
+        : 'bg-sandalwood-100 text-sandalwood-400',
+      line: isDone ? 'bg-teal-300' : 'bg-sandalwood-100',
+      label: isActive
+        ? 'text-gold-700 font-semibold'
+        : isDone
+        ? 'text-teal-700'
+        : 'text-sandalwood-400',
+    };
+  };
+
+  const isLinear = activeStep !== 'revoked' && activeStep !== 'cancelled';
+  const displaySteps = isLinear
+    ? steps.filter((s) => s.key !== 'revoked' && s.key !== 'cancelled')
+    : activeStep === 'revoked'
+    ? [steps[0], steps[1], steps[2], steps[4]]
+    : [steps[0], steps[5]];
+
+  return (
+    <div className="bg-sandalwood-50 rounded-xl p-4 border border-sandalwood-100">
+      <div className="flex items-center justify-between gap-1 overflow-x-auto pb-1">
+        {displaySteps.map((step, idx) => {
+          const style = getStepStyle(
+            steps.findIndex((s) => s.key === step.key),
+            step.key
+          );
+          const isLast = idx === displaySteps.length - 1;
+          const isCurrentStep = step.key === activeStep;
+          return (
+            <div key={step.key} className="flex items-center flex-shrink-0">
+              <div className="flex flex-col items-center gap-1.5 min-w-[64px]">
+                <div
+                  className={`w-9 h-9 rounded-full flex items-center justify-center shadow-sm transition-all ${style.dot} ${isCurrentStep ? 'ring-4 ring-gold-100 scale-110' : ''}`}
+                >
+                  <step.icon className="w-4 h-4" />
+                </div>
+                <span className={`text-xs whitespace-nowrap ${style.label}`}>
+                  {step.label}
+                </span>
+                {step.key === 'partial' && outQuantity > 0 && (
+                  <span className="text-[10px] text-sandalwood-500 -mt-0.5">
+                    {outQuantity}/{bill.quantity}件
+                  </span>
+                )}
+                {step.key === 'full' && outQuantity >= bill.quantity && bill.quantity > 0 && (
+                  <span className="text-[10px] text-sandalwood-500 -mt-0.5">
+                    {outQuantity}件
+                  </span>
+                )}
+                {isCurrentStep && latestLog && (
+                  <span className="text-[10px] text-sandalwood-500 -mt-0.5">
+                    {new Date(latestLog.createdAt).toLocaleDateString('zh-CN', {
+                      month: '2-digit',
+                      day: '2-digit',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                )}
+              </div>
+              {!isLast && (
+                <div
+                  className={`w-6 md:w-10 h-0.5 mx-0.5 md:mx-1 -mt-4 ${style.line}`}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

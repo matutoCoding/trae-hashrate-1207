@@ -156,9 +156,9 @@ export default function Batches() {
     });
 
     if (updated) {
-      setSelectedBatch(updated);
+      setSelectedBatch(null);
+      setIsEditing(false);
     }
-    setIsEditing(false);
   };
 
   const formatDateTime = (isoString: string) => {

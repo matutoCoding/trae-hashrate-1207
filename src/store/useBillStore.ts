@@ -85,13 +85,15 @@ export const useBillStore = create<BillState>()(
         if (!bill || bill.status === 'cancelled') return undefined;
 
         const stockOuts = useStockOutStore.getState().getStockOutsByBill(id);
+        const totalRestored = stockOuts.reduce((sum, o) => sum + o.quantity, 0);
+
         stockOuts.forEach((out) => {
           useBatchStore.getState().updateRemaining(out.batchId, -out.quantity, {
             referenceId: id,
-            remark: `账单取消${bill.billNo}，恢复出库${out.quantity}件`,
+            remark: `账单取消${bill.billNo}，恢复${out.quantity}件库存（原去向：${out.destination}）`,
             txType: 'bill_cancel',
           });
-          useStockOutStore.getState().deleteStockOut(out.id);
+          useStockOutStore.getState().removeStockOutSilent(out.id);
         });
 
         set((state) => ({
@@ -99,8 +101,10 @@ export const useBillStore = create<BillState>()(
         }));
 
         createFulfillmentLog(id, 'cancel', {
-          quantity: stockOuts.reduce((sum, o) => sum + o.quantity, 0),
-          remark: `取消账单${bill.billNo}，已恢复${stockOuts.length}笔出库共${stockOuts.reduce((sum, o) => sum + o.quantity, 0)}件库存`,
+          quantity: totalRestored,
+          remark: stockOuts.length > 0
+            ? `取消账单${bill.billNo}，已恢复${stockOuts.length}笔出库共${totalRestored}件库存`
+            : `取消账单${bill.billNo}（无出库记录）`,
         });
 
         return get().bills.find((b) => b.id === id);

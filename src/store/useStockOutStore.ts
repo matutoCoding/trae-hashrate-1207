@@ -9,6 +9,7 @@ interface StockOutState {
   stockOuts: StockOut[];
   addStockOut: (stockOut: Omit<StockOut, 'id' | 'operator' | 'billId'> & { billId?: string | null }) => StockOut;
   deleteStockOut: (id: string) => void;
+  removeStockOutSilent: (id: string) => void;
   getStockOutById: (id: string) => StockOut | undefined;
   getStockOutsByBatch: (batchId: string) => StockOut[];
   getStockOutsByBill: (billId: string) => StockOut[];
@@ -89,6 +90,12 @@ export const useStockOutStore = create<StockOutState>()(
             });
           }
         }
+        set((state) => ({
+          stockOuts: state.stockOuts.filter((s) => s.id !== id),
+        }));
+      },
+
+      removeStockOutSilent: (id) => {
         set((state) => ({
           stockOuts: state.stockOuts.filter((s) => s.id !== id),
         }));

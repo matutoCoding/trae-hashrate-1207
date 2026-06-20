@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { BillFulfillmentLog, BillFulfillmentType } from '@/types';
+import { useBillStore } from './useBillStore';
 
 interface BillFulfillmentState {
   logs: BillFulfillmentLog[];
@@ -8,6 +9,12 @@ interface BillFulfillmentState {
     log: Omit<BillFulfillmentLog, 'id' | 'createdAt' | 'operator'>
   ) => BillFulfillmentLog;
   getLogsByBill: (billId: string) => BillFulfillmentLog[];
+  getFilteredLogs: (filters: {
+    startDate?: string;
+    endDate?: string;
+    customerName?: string;
+    types?: BillFulfillmentType[];
+  }) => BillFulfillmentLog[];
   clearLogs: () => void;
 }
 
@@ -32,6 +39,37 @@ export const useBillFulfillmentStore = create<BillFulfillmentState>()(
       getLogsByBill: (billId) => {
         return get()
           .logs.filter((l) => l.billId === billId)
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      },
+
+      getFilteredLogs: (filters) => {
+        const { startDate, endDate, customerName, types } = filters;
+        const bills = useBillStore.getState().bills;
+        const billIdSet = customerName
+          ? new Set(
+              bills
+                .filter((b) =>
+                  b.customerName.toLowerCase().includes(customerName.toLowerCase()) ||
+                  b.billNo.toLowerCase().includes(customerName.toLowerCase())
+                )
+                .map((b) => b.id)
+            )
+          : null;
+
+        return get()
+          .logs.filter((l) => {
+            if (types && types.length > 0 && !types.includes(l.type)) return false;
+            if (billIdSet && !billIdSet.has(l.billId)) return false;
+            if (startDate) {
+              const txDate = l.createdAt.split('T')[0];
+              if (txDate < startDate) return false;
+            }
+            if (endDate) {
+              const txDate = l.createdAt.split('T')[0];
+              if (txDate > endDate) return false;
+            }
+            return true;
+          })
           .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       },
 
